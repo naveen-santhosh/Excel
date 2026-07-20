@@ -1,0 +1,31 @@
+# Node/frontend dependencies
+node_modules/
+dist/
+dist-ssr/
+*.local
+.env
+
+# Python files
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+ENV/
+
+# Project output and temp files
+*.xlsx
+temp_img_*.png
+temp_*.pdf
+temp_*.xlsx
+
+# Editor files
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
