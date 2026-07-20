@@ -23,6 +23,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+async def health_check():
+    return {"status": "healthy"}
+
 # Initialize OCR reader globally so it only loads once
 reader = easyocr.Reader(['en'])
 
