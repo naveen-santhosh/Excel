@@ -27,8 +27,15 @@ app.add_middleware(
 async def health_check():
     return {"status": "healthy"}
 
-# Initialize OCR reader globally so it only loads once
-reader = easyocr.Reader(['en'])
+# Lazy-load OCR reader to speed up startup and prevent permission issues in home directories
+reader = None
+
+def get_reader():
+    global reader
+    if reader is None:
+        # Save models in /tmp/easyocr_models which is always writable in container environments
+        reader = easyocr.Reader(['en'], model_storage_directory='/tmp/easyocr_models')
+    return reader
 
 def parse_text(text: str):
     """Attempt to parse specific fields from the text using a robust block-finding algorithm."""
@@ -162,7 +169,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             
             # Extract text using OCR
             text_np = np.array(text_crop)
-            ocr_results = reader.readtext(text_np, detail=0)
+            ocr_results = get_reader().readtext(text_np, detail=0)
             ocr_text = "\n".join(ocr_results)
             
             parsed_data = parse_text(ocr_text)
