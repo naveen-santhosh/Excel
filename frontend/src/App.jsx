@@ -60,7 +60,10 @@ function App() {
     formData.append('file', file)
 
     try {
-      const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+      let apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+      if (apiBaseUrl && !apiBaseUrl.startsWith('http://') && !apiBaseUrl.startsWith('https://')) {
+        apiBaseUrl = `https://${apiBaseUrl}`;
+      }
       const response = await fetch(`${apiBaseUrl}/api/upload`, {
         method: 'POST',
         body: formData,
