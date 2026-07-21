@@ -27,6 +27,7 @@ app.add_middleware(
         "http://localhost:5173",
         "https://pdf-to-excel-xi-six.vercel.app"
     ],
+    allow_origin_regex=r"https://pdf-to-excel-.*\.vercel\.app",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
