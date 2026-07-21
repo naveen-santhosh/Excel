@@ -179,13 +179,8 @@ async def upload_pdf(file: UploadFile = File(...)):
             
             # Use the single-threaded low-memory rembg session
             def process_rembg(img_b):
-                import onnxruntime as ort
                 from rembg import remove, new_session
-                opts = ort.SessionOptions()
-                opts.intra_op_num_threads = 1
-                opts.inter_op_num_threads = 1
-                opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-                sess = new_session("u2net", providers=["CPUExecutionProvider"], sess_opts=opts)
+                sess = new_session("u2net", providers=["CPUExecutionProvider"])
                 res = remove(img_b, session=sess)
                 del sess
                 return res
