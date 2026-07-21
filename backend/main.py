@@ -149,8 +149,8 @@ async def upload_pdf(file: UploadFile = File(...)):
         row = 1
         
         for page_num in range(len(pdf_document)):
-            # Skip the first page (banner page) as requested by the user
-            if page_num == 0:
+            # Skip the first page (banner page) if there are multiple pages
+            if page_num == 0 and len(pdf_document) > 1:
                 continue
                 
             page = pdf_document.load_page(page_num)
@@ -224,7 +224,12 @@ async def upload_pdf(file: UploadFile = File(...)):
             gc.collect()
             
     except Exception as e:
-        print(f"Error: {e}")
+        import traceback
+        err_msg = f"Error: {str(e)}"
+        print(err_msg)
+        traceback.print_exc()
+        worksheet.write(row, 0, "An error occurred during processing!")
+        worksheet.write(row + 1, 0, err_msg)
     finally:
         if 'pdf_document' in locals():
             pdf_document.close()
