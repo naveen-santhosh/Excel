@@ -36,28 +36,7 @@ app.add_middleware(
 async def health_check():
     return {"status": "healthy"}
 
-# Lazy-load OCR reader to speed up startup and prevent permission issues in home directories
-reader = None
-
-def get_reader():
-    global reader
-    if reader is None:
-        # Save models in /tmp/easyocr_models which is always writable in container environments
-        reader = easyocr.Reader(['en'], model_storage_directory='/tmp/easyocr_models')
-    return reader
-
-# Lazy-load single-threaded rembg session to save memory
-rembg_session = None
-
-def get_rembg_session():
-    global rembg_session
-    if rembg_session is None:
-        opts = ort.SessionOptions()
-        opts.intra_op_num_threads = 1
-        opts.inter_op_num_threads = 1
-        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-        rembg_session = new_session("u2net", providers=["CPUExecutionProvider"], sess_opts=opts)
-    return rembg_session
+# We will instantiate models locally and destroy them to save memory
 
 def parse_text(text: str):
     """Attempt to parse specific fields from the text using a robust block-finding algorithm."""
@@ -192,7 +171,11 @@ async def upload_pdf(file: UploadFile = File(...)):
             # Extract text using OCR under no_grad to reduce memory usage
             text_np = np.array(text_crop)
             with torch.no_grad():
-                ocr_results = get_reader().readtext(text_np, detail=0)
+                # Initialize reader locally so it can be garbage collected
+                reader = easyocr.Reader(['en'], model_storage_directory='/tmp/easyocr_models', gpu=False)
+                ocr_results = reader.readtext(text_np, detail=0)
+                del reader
+                gc.collect()
             ocr_text = "\n".join(ocr_results)
             
             parsed_data = parse_text(ocr_text)
@@ -203,7 +186,18 @@ async def upload_pdf(file: UploadFile = File(...)):
             best_img_bytes = model_bytes.getvalue()
             
             # Use the single-threaded low-memory rembg session
-            output_img_bytes = await asyncio.to_thread(remove, best_img_bytes, session=get_rembg_session())
+            def process_rembg(img_b):
+                opts = ort.SessionOptions()
+                opts.intra_op_num_threads = 1
+                opts.inter_op_num_threads = 1
+                opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+                sess = new_session("u2net", providers=["CPUExecutionProvider"], sess_opts=opts)
+                res = remove(img_b, session=sess)
+                del sess
+                return res
+            
+            output_img_bytes = await asyncio.to_thread(process_rembg, best_img_bytes)
+            gc.collect()
             
             temp_img_path = f"temp_img_{page_num}.png"
             img_io = io.BytesIO(output_img_bytes)
