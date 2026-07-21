@@ -7,17 +7,9 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import fitz  # PyMuPDF
-from rembg import remove, new_session
-import onnxruntime as ort
 import xlsxwriter
 from PIL import Image
-import easyocr
 import numpy as np
-import torch
-
-# Optimize PyTorch for low-memory CPU environments
-torch.set_num_threads(1)
-torch.set_num_interop_threads(1)
 
 app = FastAPI()
 
@@ -171,6 +163,13 @@ async def upload_pdf(file: UploadFile = File(...)):
             
             # Extract text using OCR under no_grad to reduce memory usage
             text_np = np.array(text_crop)
+            import torch
+            import easyocr
+            
+            # Optimize PyTorch for low-memory CPU environments
+            torch.set_num_threads(1)
+            torch.set_num_interop_threads(1)
+            
             with torch.no_grad():
                 # Initialize reader locally so it can be garbage collected
                 reader = easyocr.Reader(['en'], model_storage_directory='/tmp/easyocr_models', gpu=False)
@@ -188,6 +187,8 @@ async def upload_pdf(file: UploadFile = File(...)):
             
             # Use the single-threaded low-memory rembg session
             def process_rembg(img_b):
+                import onnxruntime as ort
+                from rembg import remove, new_session
                 opts = ort.SessionOptions()
                 opts.intra_op_num_threads = 1
                 opts.inter_op_num_threads = 1
