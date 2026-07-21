@@ -161,22 +161,11 @@ async def upload_pdf(file: UploadFile = File(...)):
             # Starting x at 35% ensures we absolutely don't cut off the first letters
             text_crop = img.crop((int(width * 0.35), int(height * 0.55), width, height))
             
-            # Extract text using OCR under no_grad to reduce memory usage
-            text_np = np.array(text_crop)
-            import torch
-            import easyocr
+            # Extract text using Tesseract OCR (low memory usage)
+            import pytesseract
             
-            # Optimize PyTorch for low-memory CPU environments
-            torch.set_num_threads(1)
-            torch.set_num_interop_threads(1)
-            
-            with torch.no_grad():
-                # Initialize reader locally so it can be garbage collected
-                reader = easyocr.Reader(['en'], model_storage_directory='/tmp/easyocr_models', gpu=False)
-                ocr_results = reader.readtext(text_np, detail=0)
-                del reader
-                gc.collect()
-            ocr_text = "\n".join(ocr_results)
+            # pytesseract can read directly from a PIL Image
+            ocr_text = pytesseract.image_to_string(text_crop)
             
             parsed_data = parse_text(ocr_text)
             
