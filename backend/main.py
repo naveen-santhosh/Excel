@@ -177,10 +177,10 @@ async def upload_pdf(file: UploadFile = File(...)):
             model_crop.save(model_bytes, format="PNG")
             best_img_bytes = model_bytes.getvalue()
             
-            # Use the single-threaded low-memory rembg session
+            # Use the single-threaded low-memory rembg session with the lightweight model
             def process_rembg(img_b):
                 from rembg import remove, new_session
-                sess = new_session("u2net", providers=["CPUExecutionProvider"])
+                sess = new_session("u2netp", providers=["CPUExecutionProvider"])
                 res = remove(img_b, session=sess)
                 del sess
                 return res
