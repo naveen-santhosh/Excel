@@ -170,6 +170,9 @@ async def upload_pdf(file: UploadFile = File(...)):
             parsed_data = parse_text(ocr_text)
             
             # Remove background from the model crop
+            # Resize image to drastically reduce memory usage during rembg processing
+            model_crop.thumbnail((500, 500))
+            
             model_bytes = io.BytesIO()
             model_crop.save(model_bytes, format="PNG")
             best_img_bytes = model_bytes.getvalue()
