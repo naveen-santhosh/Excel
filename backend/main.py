@@ -2,15 +2,22 @@ import io
 import re
 import os
 import asyncio
+import gc
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import fitz  # PyMuPDF
-from rembg import remove
+from rembg import remove, new_session
+import onnxruntime as ort
 import xlsxwriter
 from PIL import Image
 import easyocr
 import numpy as np
+import torch
+
+# Optimize PyTorch for low-memory CPU environments
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
 
 app = FastAPI()
 
@@ -36,6 +43,19 @@ def get_reader():
         # Save models in /tmp/easyocr_models which is always writable in container environments
         reader = easyocr.Reader(['en'], model_storage_directory='/tmp/easyocr_models')
     return reader
+
+# Lazy-load single-threaded rembg session to save memory
+rembg_session = None
+
+def get_rembg_session():
+    global rembg_session
+    if rembg_session is None:
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 1
+        opts.inter_op_num_threads = 1
+        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        rembg_session = new_session("u2net", providers=["CPUExecutionProvider"], sess_opts=opts)
+    return rembg_session
 
 def parse_text(text: str):
     """Attempt to parse specific fields from the text using a robust block-finding algorithm."""
@@ -167,9 +187,10 @@ async def upload_pdf(file: UploadFile = File(...)):
             # Starting x at 35% ensures we absolutely don't cut off the first letters
             text_crop = img.crop((int(width * 0.35), int(height * 0.55), width, height))
             
-            # Extract text using OCR
+            # Extract text using OCR under no_grad to reduce memory usage
             text_np = np.array(text_crop)
-            ocr_results = get_reader().readtext(text_np, detail=0)
+            with torch.no_grad():
+                ocr_results = get_reader().readtext(text_np, detail=0)
             ocr_text = "\n".join(ocr_results)
             
             parsed_data = parse_text(ocr_text)
@@ -179,7 +200,8 @@ async def upload_pdf(file: UploadFile = File(...)):
             model_crop.save(model_bytes, format="PNG")
             best_img_bytes = model_bytes.getvalue()
             
-            output_img_bytes = await asyncio.to_thread(remove, best_img_bytes)
+            # Use the single-threaded low-memory rembg session
+            output_img_bytes = await asyncio.to_thread(remove, best_img_bytes, session=get_rembg_session())
             
             temp_img_path = f"temp_img_{page_num}.png"
             img_io = io.BytesIO(output_img_bytes)
@@ -197,6 +219,12 @@ async def upload_pdf(file: UploadFile = File(...)):
             worksheet.write(row, 5, parsed_data["Sizes"])
             
             row += 1
+            
+            # Clean up memory immediately after processing each page
+            del page
+            del model_crop
+            del text_crop
+            gc.collect()
             
     except Exception as e:
         print(f"Error: {e}")
