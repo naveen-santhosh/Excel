@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 import { UploadCloud, FileType, CheckCircle, AlertCircle, Loader2, Download } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
 import Tesseract from 'tesseract.js'
-import removeBackground from '@imgly/background-removal'
+import { removeBackground } from '@imgly/background-removal'
 import './App.css'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`
@@ -14,6 +14,7 @@ function App() {
   const [errorMsg, setErrorMsg] = useState('')
   const [downloadUrl, setDownloadUrl] = useState('')
   const [progressMsg, setProgressMsg] = useState('')
+  const [progress, setProgress] = useState(0)
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault()
@@ -53,6 +54,7 @@ function App() {
     setStatus('idle')
     setErrorMsg('')
     setProgressMsg('')
+    setProgress(0)
     if (downloadUrl) {
       URL.revokeObjectURL(downloadUrl)
       setDownloadUrl('')
@@ -137,6 +139,9 @@ function App() {
     setProgressMsg('Loading PDF...')
 
     try {
+      setProgressMsg('Initializing text recognition engine...')
+      const worker = await Tesseract.createWorker('eng')
+      
       const arrayBuffer = await file.arrayBuffer()
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
       const products = []
@@ -146,6 +151,7 @@ function App() {
         if (i === 1 && pdf.numPages > 1) continue
 
         setProgressMsg(`Processing page ${i} of ${pdf.numPages}...`)
+        setProgress(Math.round(((i - 1) / pdf.numPages) * 100))
         
         const page = await pdf.getPage(i)
         const viewport = page.getViewport({ scale: 2.0 }) // High res
@@ -172,25 +178,31 @@ function App() {
         const tHeight = canvas.height * 0.45
         textCanvas.width = tWidth
         textCanvas.height = tHeight
+        
+        // Apply filter to improve OCR accuracy by maximizing contrast
+        textCtx.filter = 'grayscale(100%) contrast(200%) brightness(110%)'
         textCtx.drawImage(canvas, canvas.width * 0.35, canvas.height * 0.55, tWidth, tHeight, 0, 0, tWidth, tHeight)
+        textCtx.filter = 'none'
 
         setProgressMsg(`Extracting text from page ${i}...`)
-        const { data: { text } } = await Tesseract.recognize(textCanvas.toDataURL(), 'eng')
+        const { data: { text } } = await worker.recognize(textCanvas.toDataURL())
         const parsedData = parseText(text)
 
         setProgressMsg(`Removing background from page ${i}...`)
         
-        // Downscale image before background removal to prevent browser OOM
+        // Downscale image proportionally before background removal to prevent browser OOM
+        const MAX_DIM = 600
+        const scale = Math.min(MAX_DIM / imgCanvas.width, MAX_DIM / imgCanvas.height)
         const smallCanvas = document.createElement('canvas')
         const smallCtx = smallCanvas.getContext('2d')
-        smallCanvas.width = 500
-        smallCanvas.height = 500
-        smallCtx.drawImage(imgCanvas, 0, 0, 500, 500)
+        smallCanvas.width = imgCanvas.width * scale
+        smallCanvas.height = imgCanvas.height * scale
+        smallCtx.drawImage(imgCanvas, 0, 0, smallCanvas.width, smallCanvas.height)
         
         const blob = await new Promise(resolve => smallCanvas.toBlob(resolve, 'image/png'))
         
-        // Use lightweight u2netp model in the browser
-        const bgRemovedBlob = await removeBackground(blob, { model: "u2netp" })
+        // Use lightweight quantized model in the browser
+        const bgRemovedBlob = await removeBackground(blob, { model: "isnet_quint8" })
         
         const base64data = await new Promise(resolve => {
           const reader = new FileReader()
@@ -207,8 +219,11 @@ function App() {
           image_base64: base64data
         })
       }
+      
+      await worker.terminate()
 
       setProgressMsg('Generating Excel file on the server...')
+      setProgress(100)
       let apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
       if (apiBaseUrl && !apiBaseUrl.startsWith('http://') && !apiBaseUrl.startsWith('https://')) {
         apiBaseUrl = `https://${apiBaseUrl}`
@@ -289,9 +304,12 @@ function App() {
           {status === 'processing' && (
             <div className="status-box processing">
               <Loader2 className="spinner" size={24} />
-              <div className="status-text">
+              <div className="status-text" style={{ width: '100%' }}>
                 <h4>{progressMsg}</h4>
-                <p>This is happening entirely on your computer! No heavy server uploads needed.</p>
+                <div className="progress-bar-container" style={{ width: '100%', height: '8px', backgroundColor: '#e2e8f0', borderRadius: '4px', marginTop: '10px', overflow: 'hidden' }}>
+                  <div className="progress-bar-fill" style={{ width: `${progress}%`, height: '100%', backgroundColor: '#3b82f6', transition: 'width 0.3s ease' }}></div>
+                </div>
+                <p style={{ marginTop: '8px' }}>This is happening entirely on your computer! No heavy server uploads needed.</p>
               </div>
             </div>
           )}
