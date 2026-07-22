@@ -1,13 +1,19 @@
 import { useState, useCallback } from 'react'
 import { UploadCloud, FileType, CheckCircle, AlertCircle, Loader2, Download } from 'lucide-react'
+import * as pdfjsLib from 'pdfjs-dist'
+import Tesseract from 'tesseract.js'
+import removeBackground from '@imgly/background-removal'
 import './App.css'
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`
 
 function App() {
   const [file, setFile] = useState(null)
   const [isDragging, setIsDragging] = useState(false)
-  const [status, setStatus] = useState('idle') // idle, uploading, processing, success, error
+  const [status, setStatus] = useState('idle') // idle, processing, success, error
   const [errorMsg, setErrorMsg] = useState('')
   const [downloadUrl, setDownloadUrl] = useState('')
+  const [progressMsg, setProgressMsg] = useState('')
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault()
@@ -46,40 +52,187 @@ function App() {
   const resetState = () => {
     setStatus('idle')
     setErrorMsg('')
+    setProgressMsg('')
     if (downloadUrl) {
       URL.revokeObjectURL(downloadUrl)
       setDownloadUrl('')
     }
   }
 
+  const parseText = (text) => {
+    let textNorm = text.replace(/\n/g, ' ').trim()
+    textNorm = textNorm.replace(/Re[ec]bok/gi, '').trim()
+    
+    let details = { "color": "", "style_code": "", "mrp": "", "material": "", "sizes": "" }
+    
+    const keywords = {
+      "color": [/color/i, /colour/i, /olor/i, /colar/i, /colur/i],
+      "style_code": [/style\s*code/i, /style\s*no/i, /style/i, /tyle\s*code/i, /syk\s*code/i, /stlye/i, /sytle/i, /code/i],
+      "mrp": [/\bmrp\b/i, /\brp\b/i, /price/i, /m\.r\.p/i],
+      "material": [/material/i, /fabric/i, /aterial/i, /matenal/i, /hatenal/i, /uatenal/i, /atenal/i],
+      "sizes": [/sizes/i, /size/i, /izes/i, /ize/i, /s1ze/i]
+    }
+    
+    let foundFields = []
+    
+    for (const [field, patterns] of Object.entries(keywords)) {
+      for (const pattern of patterns) {
+        const match = pattern.exec(textNorm)
+        if (match) {
+          if (!foundFields.some(f => f.field === field)) {
+            foundFields.push({ field, start: match.index, end: match.index + match[0].length })
+          }
+          break
+        }
+      }
+    }
+    
+    foundFields.sort((a, b) => a.start - b.start)
+    
+    if (foundFields.length > 0 && foundFields[0].start > 0) {
+      let preText = textNorm.substring(0, foundFields[0].start).trim()
+      preText = preText.replace(/[\s:\-]+$/, '').trim()
+      if (preText) {
+        const logicalOrder = ["color", "style_code", "mrp", "material", "sizes"]
+        for (const field of logicalOrder) {
+          if (!foundFields.some(f => f.field === field)) {
+            details[field] = preText
+            break
+          }
+        }
+      }
+    }
+    
+    for (let i = 0; i < foundFields.length; i++) {
+      const current = foundFields[i]
+      const fieldName = current.field
+      
+      let startIdx = current.end
+      while (startIdx < textNorm.length && [' ', ':', '-'].includes(textNorm[startIdx])) {
+        startIdx++
+      }
+      
+      let endIdx = (i + 1 < foundFields.length) ? foundFields[i+1].start : textNorm.length
+      details[fieldName] = textNorm.substring(startIdx, endIdx).trim()
+    }
+    
+    for (const key of Object.keys(details)) {
+      details[key] = details[key].replace(/[\s:\-]+$/, '').trim()
+    }
+    
+    if (details.mrp) {
+      details.mrp = details.mrp.replace(/[\s/\-]+$/, '').trim()
+    }
+    if (details.sizes) {
+      details.sizes = details.sizes.replace(/I/g, '/')
+    }
+    
+    return details
+  }
+
   const handleUpload = async () => {
     if (!file) return
 
     setStatus('processing')
-    const formData = new FormData()
-    formData.append('file', file)
+    setProgressMsg('Loading PDF...')
 
     try {
-      let apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
-      if (apiBaseUrl && !apiBaseUrl.startsWith('http://') && !apiBaseUrl.startsWith('https://')) {
-        apiBaseUrl = `https://${apiBaseUrl}`;
+      const arrayBuffer = await file.arrayBuffer()
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+      const products = []
+
+      for (let i = 1; i <= pdf.numPages; i++) {
+        // Skip first page if multiple pages
+        if (i === 1 && pdf.numPages > 1) continue
+
+        setProgressMsg(`Processing page ${i} of ${pdf.numPages}...`)
+        
+        const page = await pdf.getPage(i)
+        const viewport = page.getViewport({ scale: 2.0 }) // High res
+        
+        // Render to canvas
+        const canvas = document.createElement('canvas')
+        const context = canvas.getContext('2d')
+        canvas.width = viewport.width
+        canvas.height = viewport.height
+        
+        await page.render({ canvasContext: context, viewport }).promise
+
+        // Crop model image (left 50%)
+        const imgCanvas = document.createElement('canvas')
+        const imgCtx = imgCanvas.getContext('2d')
+        imgCanvas.width = canvas.width * 0.5
+        imgCanvas.height = canvas.height
+        imgCtx.drawImage(canvas, 0, 0, imgCanvas.width, imgCanvas.height, 0, 0, imgCanvas.width, imgCanvas.height)
+
+        // Crop text (bottom right)
+        const textCanvas = document.createElement('canvas')
+        const textCtx = textCanvas.getContext('2d')
+        const tWidth = canvas.width * 0.65
+        const tHeight = canvas.height * 0.45
+        textCanvas.width = tWidth
+        textCanvas.height = tHeight
+        textCtx.drawImage(canvas, canvas.width * 0.35, canvas.height * 0.55, tWidth, tHeight, 0, 0, tWidth, tHeight)
+
+        setProgressMsg(`Extracting text from page ${i}...`)
+        const { data: { text } } = await Tesseract.recognize(textCanvas.toDataURL(), 'eng')
+        const parsedData = parseText(text)
+
+        setProgressMsg(`Removing background from page ${i}...`)
+        
+        // Downscale image before background removal to prevent browser OOM
+        const smallCanvas = document.createElement('canvas')
+        const smallCtx = smallCanvas.getContext('2d')
+        smallCanvas.width = 500
+        smallCanvas.height = 500
+        smallCtx.drawImage(imgCanvas, 0, 0, 500, 500)
+        
+        const blob = await new Promise(resolve => smallCanvas.toBlob(resolve, 'image/png'))
+        
+        // Use lightweight u2netp model in the browser
+        const bgRemovedBlob = await removeBackground(blob, { model: "u2netp" })
+        
+        const base64data = await new Promise(resolve => {
+          const reader = new FileReader()
+          reader.onloadend = () => resolve(reader.result)
+          reader.readAsDataURL(bgRemovedBlob)
+        })
+
+        products.push({
+          color: parsedData.color,
+          style_code: parsedData.style_code,
+          mrp: parsedData.mrp,
+          material: parsedData.material,
+          sizes: parsedData.sizes,
+          image_base64: base64data
+        })
       }
-      const response = await fetch(`${apiBaseUrl}/api/upload`, {
+
+      setProgressMsg('Generating Excel file on the server...')
+      let apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+      if (apiBaseUrl && !apiBaseUrl.startsWith('http://') && !apiBaseUrl.startsWith('https://')) {
+        apiBaseUrl = `https://${apiBaseUrl}`
+      }
+      
+      const response = await fetch(`${apiBaseUrl}/generate-excel`, {
         method: 'POST',
-        body: formData,
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ products })
       })
 
       if (!response.ok) {
-        throw new Error('Failed to process the PDF. Please try again.')
+        throw new Error('Failed to generate Excel file on the server.')
       }
 
-      // Get the file as a blob
       const blob = await response.blob()
       const url = window.URL.createObjectURL(blob)
       setDownloadUrl(url)
       setStatus('success')
     } catch (err) {
-      setErrorMsg(err.message || 'An error occurred during processing.')
+      console.error(err)
+      setErrorMsg(err.message || 'An error occurred during local processing.')
       setStatus('error')
     }
   }
@@ -137,8 +290,8 @@ function App() {
             <div className="status-box processing">
               <Loader2 className="spinner" size={24} />
               <div className="status-text">
-                <h4>Processing your catalog...</h4>
-                <p>Extracting images, removing backgrounds, and parsing text. This might take a few minutes for large files.</p>
+                <h4>{progressMsg}</h4>
+                <p>This is happening entirely on your computer! No heavy server uploads needed.</p>
               </div>
             </div>
           )}
@@ -147,7 +300,7 @@ function App() {
             <div className="status-box error">
               <AlertCircle size={24} />
               <div className="status-text">
-                <h4>Upload Failed</h4>
+                <h4>Processing Failed</h4>
                 <p>{errorMsg}</p>
               </div>
             </div>

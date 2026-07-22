@@ -104,27 +104,20 @@ def parse_text(text: str):
         val = text_norm[start_idx:end_idx].strip()
         details[field_name] = val
         
-    # Final cleanup sweeps
-    for key in details:
-        # Remove stray colons or dashes that might have ended up at the end of values
-        details[key] = re.sub(r'[\s:\-]+$', '', details[key]).strip()
-        
-    if details["MRP"]:
-        # Specific cleanup for MRP to extract just the number if possible, or remove common OCR artifacts
-        details["MRP"] = re.sub(r'[\s/\-]+$', '', details["MRP"]).strip()
-        
-    if details["Sizes"]:
-        details["Sizes"] = details["Sizes"].replace('I', '/')
-        
-    return details
+class ProductData(BaseModel):
+    color: str
+    style_code: str
+    mrp: str
+    material: str
+    sizes: str
+    image_base64: str
 
-@app.post("/api/upload")
-async def upload_pdf(file: UploadFile = File(...)):
-    pdf_path = f"temp_{file.filename}"
-    with open(pdf_path, "wb") as f:
-        f.write(await file.read())
-        
-    excel_filename = f"output_{file.filename}.xlsx"
+class ExcelRequest(BaseModel):
+    products: List[ProductData]
+
+@app.post("/generate-excel")
+async def generate_excel(request: ExcelRequest):
+    excel_filename = "catalog_output.xlsx"
     workbook = xlsxwriter.Workbook(excel_filename)
     worksheet = workbook.add_worksheet()
     
@@ -136,80 +129,30 @@ async def upload_pdf(file: UploadFile = File(...)):
     for col in range(1, 6):
         worksheet.set_column(col, col, 20)
 
+    row = 1
+    
     try:
-        pdf_document = fitz.open(pdf_path)
-        row = 1
-        
-        for page_num in range(len(pdf_document)):
-            # Skip the first page (banner page) if there are multiple pages
-            if page_num == 0 and len(pdf_document) > 1:
-                continue
-                
-            page = pdf_document.load_page(page_num)
-            
-            # Render the whole page to a high-res image
-            pix = page.get_pixmap(dpi=150)
-            img_data = pix.tobytes("png")
-            img = Image.open(io.BytesIO(img_data))
-            
-            width, height = img.size
-            
-            # Crop the left 50% for the main model image
-            model_crop = img.crop((0, 0, int(width * 0.50), height))
-            
-            # Crop the bottom right for the text box
-            # Starting x at 35% ensures we absolutely don't cut off the first letters
-            text_crop = img.crop((int(width * 0.35), int(height * 0.55), width, height))
-            
-            # Extract text using Tesseract OCR (low memory usage)
-            import pytesseract
-            
-            # pytesseract can read directly from a PIL Image
-            ocr_text = pytesseract.image_to_string(text_crop)
-            
-            parsed_data = parse_text(ocr_text)
-            
-            # Remove background from the model crop
-            # Resize image to drastically reduce memory usage during rembg processing
-            model_crop.thumbnail((500, 500))
-            
-            model_bytes = io.BytesIO()
-            model_crop.save(model_bytes, format="PNG")
-            best_img_bytes = model_bytes.getvalue()
-            
-            # Use the single-threaded low-memory rembg session with the lightweight model
-            def process_rembg(img_b):
-                from rembg import remove, new_session
-                sess = new_session("u2netp", providers=["CPUExecutionProvider"])
-                res = remove(img_b, session=sess)
-                del sess
-                return res
-            
-            output_img_bytes = await asyncio.to_thread(process_rembg, best_img_bytes)
-            gc.collect()
-            
-            temp_img_path = f"temp_img_{page_num}.png"
-            img_io = io.BytesIO(output_img_bytes)
-            with Image.open(img_io) as pil_img:
-                pil_img.save(temp_img_path, format="PNG")
-                
+        for product in request.products:
             worksheet.set_row(row, 150)
-            worksheet.insert_image(row, 0, temp_img_path, {'x_scale': 0.15, 'y_scale': 0.15, 'positioning': 1})
             
-            # Write text data
-            worksheet.write(row, 1, parsed_data["Color"])
-            worksheet.write(row, 2, parsed_data["Style code"])
-            worksheet.write(row, 3, parsed_data["MRP"])
-            worksheet.write(row, 4, parsed_data["Material"])
-            worksheet.write(row, 5, parsed_data["Sizes"])
+            # Decode base64 image
+            if product.image_base64.startswith("data:image"):
+                base64_data = product.image_base64.split(",")[1]
+            else:
+                base64_data = product.image_base64
+                
+            image_bytes = base64.b64decode(base64_data)
+            img_io = io.BytesIO(image_bytes)
+            
+            worksheet.insert_image(row, 0, f"img_{row}.png", {'image_data': img_io, 'x_scale': 0.15, 'y_scale': 0.15, 'positioning': 1})
+            
+            worksheet.write(row, 1, product.color)
+            worksheet.write(row, 2, product.style_code)
+            worksheet.write(row, 3, product.mrp)
+            worksheet.write(row, 4, product.material)
+            worksheet.write(row, 5, product.sizes)
             
             row += 1
-            
-            # Clean up memory immediately after processing each page
-            del page
-            del model_crop
-            del text_crop
-            gc.collect()
             
     except Exception as e:
         import traceback
@@ -219,20 +162,8 @@ async def upload_pdf(file: UploadFile = File(...)):
         worksheet.write(row, 0, "An error occurred during processing!")
         worksheet.write(row + 1, 0, err_msg)
     finally:
-        if 'pdf_document' in locals():
-            pdf_document.close()
         workbook.close()
         
-        if os.path.exists(pdf_path):
-            os.remove(pdf_path)
-            
-        for f in os.listdir("."):
-            if f.startswith("temp_img_") and f.endswith(".png"):
-                try:
-                    os.remove(f)
-                except:
-                    pass
-
     return FileResponse(
         path=excel_filename, 
         filename="catalog_output.xlsx",
