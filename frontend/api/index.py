@@ -1,11 +1,20 @@
 import io
 import base64
+import os
+import json
+import traceback
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 import xlsxwriter
+
+import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv()
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
 
 app = FastAPI()
 
@@ -25,6 +34,73 @@ app.add_middleware(
 async def health_check():
     return {"status": "healthy"}
 
+class ExtractRequest(BaseModel):
+    image_base64: str
+
+class ExtractedInfo(BaseModel):
+    is_product_page: bool
+    color: str = ""
+    style_code: str = ""
+    mrp: str = ""
+    material: str = ""
+    sizes: str = ""
+
+@app.post("/api/extract-info", response_model=ExtractedInfo)
+async def extract_info(request: ExtractRequest):
+    try:
+        if request.image_base64.startswith("data:image"):
+            base64_data = request.image_base64.split(",")[1]
+        else:
+            base64_data = request.image_base64
+            
+        image_bytes = base64.b64decode(base64_data)
+        
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        
+        prompt = """
+        You are an expert data extractor for product catalogs. Analyze the provided catalog page image.
+        1. Determine if this is a "product page". A product page contains a specific product with specs (e.g., Color, Style Code, MRP, Material, Sizes). Introductory pages, brand story pages, or purely lifestyle images without specs are NOT product pages.
+        2. If it IS a product page, extract the exact values for the following fields. If a field is missing, leave it as an empty string.
+        3. If it is NOT a product page, set "is_product_page" to false and leave all other fields empty.
+
+        Return ONLY a valid JSON object matching this exact schema, with no markdown formatting or backticks:
+        {
+          "is_product_page": boolean,
+          "color": "string",
+          "style_code": "string",
+          "mrp": "string",
+          "material": "string",
+          "sizes": "string"
+        }
+        """
+        
+        response = model.generate_content([
+            {'mime_type': 'image/jpeg', 'data': image_bytes},
+            prompt
+        ])
+        
+        text = response.text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.endswith("```"):
+            text = text[:-3]
+            
+        data = json.loads(text.strip())
+        
+        return ExtractedInfo(
+            is_product_page=data.get("is_product_page", False),
+            color=str(data.get("color", "")),
+            style_code=str(data.get("style_code", "")),
+            mrp=str(data.get("mrp", "")),
+            material=str(data.get("material", "")),
+            sizes=str(data.get("sizes", ""))
+        )
+        
+    except Exception as e:
+        print(f"Extraction error: {e}")
+        traceback.print_exc()
+        return ExtractedInfo(is_product_page=False)
+
 class ProductData(BaseModel):
     color: str
     style_code: str
@@ -32,6 +108,8 @@ class ProductData(BaseModel):
     material: str
     sizes: str
     image_base64: str
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 class ExcelRequest(BaseModel):
     products: List[ProductData]
@@ -64,7 +142,19 @@ async def generate_excel(request: ExcelRequest):
             image_bytes = base64.b64decode(base64_data)
             img_io = io.BytesIO(image_bytes)
             
-            worksheet.insert_image(row, 0, f"img_{row}.png", {'image_data': img_io, 'x_scale': 0.6, 'y_scale': 0.6, 'positioning': 1})
+            x_scale = 0.6
+            y_scale = 0.6
+            if product.width and product.height:
+                # Cell width 60 is approx 420 pixels, height 450 is approx 600 pixels
+                target_width = 400.0
+                target_height = 580.0
+                scale_w = target_width / product.width
+                scale_h = target_height / product.height
+                scale = min(scale_w, scale_h)
+                x_scale = scale
+                y_scale = scale
+            
+            worksheet.insert_image(row, 0, f"img_{row}.png", {'image_data': img_io, 'x_scale': x_scale, 'y_scale': y_scale, 'positioning': 1})
             
             worksheet.write(row, 1, product.color)
             worksheet.write(row, 2, product.style_code)

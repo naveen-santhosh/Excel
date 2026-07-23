@@ -62,77 +62,6 @@ function App() {
     }
   }
 
-  const parseText = (text) => {
-    let textNorm = text.replace(/\n/g, ' ').trim()
-    textNorm = textNorm.replace(/Re[ec]bok/gi, '').trim()
-    
-    let details = { "color": "", "style_code": "", "mrp": "", "material": "", "sizes": "" }
-    
-    const keywords = {
-      "color": [/color/i, /colour/i, /olor/i, /colar/i, /colur/i],
-      "style_code": [/style\s*code/i, /style\s*no/i, /style/i, /tyle\s*code/i, /syk\s*code/i, /stlye/i, /sytle/i, /code/i],
-      "mrp": [/\bmrp\b/i, /\brp\b/i, /price/i, /m\.r\.p/i],
-      "material": [/material/i, /fabric/i, /aterial/i, /matenal/i, /hatenal/i, /uatenal/i, /atenal/i],
-      "sizes": [/sizes/i, /size/i, /izes/i, /ize/i, /s1ze/i]
-    }
-    
-    let foundFields = []
-    
-    for (const [field, patterns] of Object.entries(keywords)) {
-      for (const pattern of patterns) {
-        const match = pattern.exec(textNorm)
-        if (match) {
-          if (!foundFields.some(f => f.field === field)) {
-            foundFields.push({ field, start: match.index, end: match.index + match[0].length })
-          }
-          break
-        }
-      }
-    }
-    
-    foundFields.sort((a, b) => a.start - b.start)
-    
-    if (foundFields.length > 0 && foundFields[0].start > 0) {
-      let preText = textNorm.substring(0, foundFields[0].start).trim()
-      preText = preText.replace(/[\s:\-]+$/, '').trim()
-      if (preText) {
-        const logicalOrder = ["color", "style_code", "mrp", "material", "sizes"]
-        for (const field of logicalOrder) {
-          if (!foundFields.some(f => f.field === field)) {
-            details[field] = preText
-            break
-          }
-        }
-      }
-    }
-    
-    for (let i = 0; i < foundFields.length; i++) {
-      const current = foundFields[i]
-      const fieldName = current.field
-      
-      let startIdx = current.end
-      while (startIdx < textNorm.length && [' ', ':', '-'].includes(textNorm[startIdx])) {
-        startIdx++
-      }
-      
-      let endIdx = (i + 1 < foundFields.length) ? foundFields[i+1].start : textNorm.length
-      details[fieldName] = textNorm.substring(startIdx, endIdx).trim()
-    }
-    
-    for (const key of Object.keys(details)) {
-      details[key] = details[key].replace(/[\s:\-]+$/, '').trim()
-    }
-    
-    if (details.mrp) {
-      details.mrp = details.mrp.replace(/[\s/\-]+$/, '').trim()
-    }
-    if (details.sizes) {
-      details.sizes = details.sizes.replace(/I/g, '/')
-    }
-    
-    return details
-  }
-
   const handleUpload = async () => {
     if (!file) return
 
@@ -145,37 +74,6 @@ function App() {
       const products = []
 
       const startTime = Date.now()
-      
-      let pendingProduct = null;
-
-      const processPendingProduct = async (prod) => {
-        setProgressMsg(`Removing background for product from page ${prod.pageNum}...`)
-        const bgRemovedBlob = await removeBackground(prod.blob, { model: "isnet_quint8" })
-        const base64data = await new Promise(resolve => {
-          const img = new Image()
-          img.onload = () => {
-            const finalCanvas = document.createElement('canvas')
-            finalCanvas.width = img.width
-            finalCanvas.height = img.height
-            const ctx = finalCanvas.getContext('2d')
-            ctx.fillStyle = '#FFFFFF'
-            ctx.fillRect(0, 0, finalCanvas.width, finalCanvas.height)
-            ctx.drawImage(img, 0, 0)
-            resolve(finalCanvas.toDataURL('image/jpeg', 0.8))
-          }
-          img.src = URL.createObjectURL(bgRemovedBlob)
-        })
-        
-        const parsedData = parseText(prod.text);
-        products.push({
-          color: parsedData.color,
-          style_code: parsedData.style_code,
-          mrp: parsedData.mrp,
-          material: parsedData.material,
-          sizes: parsedData.sizes,
-          image_base64: base64data
-        })
-      };
 
       for (let i = 1; i <= pdf.numPages; i++) {
         // Skip first page if multiple pages
@@ -192,18 +90,13 @@ function App() {
           setEta(`~${m > 0 ? `${m}m ` : ''}${s}s remaining`)
         }
 
-        setProgressMsg(`Processing page ${i} of ${pdf.numPages}...`)
+        setProgressMsg(`Analyzing page ${i} of ${pdf.numPages} with AI...`)
         setProgress(Math.round(((i - 1) / pdf.numPages) * 100))
         
         const page = await pdf.getPage(i)
         
-        // Extract Text Natively (Instant)
-        setProgressMsg(`Extracting text from page ${i}...`)
-        const textContent = await page.getTextContent()
-        let pageText = textContent.items.map(item => item.str).join(' ').trim()
-
-        // Extract Image (Render and Crop)
-        const viewport = page.getViewport({ scale: 2.0 }) // High res
+        // Extract Image for AI Analysis
+        const viewport = page.getViewport({ scale: 3.0 }) // High res for better quality
         const canvas = document.createElement('canvas')
         const context = canvas.getContext('2d')
         canvas.width = viewport.width
@@ -211,49 +104,96 @@ function App() {
         
         await page.render({ canvasContext: context, viewport }).promise
 
-        // Crop model image (left 70% to avoid cutting off wider images)
+        // Send full page image to AI Backend
+        const aiCanvas = document.createElement('canvas')
+        const aiCtx = aiCanvas.getContext('2d')
+        const MAX_AI_DIM = 800 // Compress to save bandwidth
+        const aiScale = Math.min(MAX_AI_DIM / canvas.width, MAX_AI_DIM / canvas.height)
+        aiCanvas.width = canvas.width * aiScale
+        aiCanvas.height = canvas.height * aiScale
+        aiCtx.fillStyle = '#FFFFFF'
+        aiCtx.fillRect(0, 0, aiCanvas.width, aiCanvas.height)
+        aiCtx.drawImage(canvas, 0, 0, aiCanvas.width, aiCanvas.height)
+        
+        const aiBase64 = aiCanvas.toDataURL('image/jpeg', 0.8)
+        
+        const isDev = import.meta.env.DEV
+        const aiEndpoint = isDev ? 'http://127.0.0.1:8000/api/extract-info' : '/api/extract-info'
+        
+        const aiResponse = await fetch(aiEndpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_base64: aiBase64 })
+        })
+        
+        if (!aiResponse.ok) {
+            console.warn(`AI extraction failed for page ${i}`)
+            continue;
+        }
+        
+        const aiData = await aiResponse.json()
+        
+        if (!aiData.is_product_page) {
+            console.log(`Page ${i} is not a product page. Skipping.`)
+            continue; // Skip intro pages!
+        }
+        
+        console.log(`Extracted from page ${i}:`, aiData)
+
+        // Process Product Image
+        setProgressMsg(`Removing background for product on page ${i}...`)
+        
+        // Crop left 70% to avoid edge text
         const imgCanvas = document.createElement('canvas')
         const imgCtx = imgCanvas.getContext('2d')
         imgCanvas.width = canvas.width * 0.70
         imgCanvas.height = canvas.height
         imgCtx.drawImage(canvas, 0, 0, imgCanvas.width, imgCanvas.height, 0, 0, imgCanvas.width, imgCanvas.height)
 
-        // Downscale image proportionally before background removal
-        const MAX_DIM = 400
-        const scale = Math.min(MAX_DIM / imgCanvas.width, MAX_DIM / imgCanvas.height)
+        // Downscale image proportionally before background removal (Increased for high quality)
+        const MAX_DIM = 1600
+        const scale = Math.min(1, Math.min(MAX_DIM / imgCanvas.width, MAX_DIM / imgCanvas.height))
         const smallCanvas = document.createElement('canvas')
         const smallCtx = smallCanvas.getContext('2d')
         smallCanvas.width = imgCanvas.width * scale
         smallCanvas.height = imgCanvas.height * scale
         
-        // Fill white background
         smallCtx.fillStyle = '#FFFFFF'
         smallCtx.fillRect(0, 0, smallCanvas.width, smallCanvas.height)
         smallCtx.drawImage(imgCanvas, 0, 0, smallCanvas.width, smallCanvas.height)
         
-        const blob = await new Promise(resolve => smallCanvas.toBlob(resolve, 'image/jpeg', 0.9))
+        const blob = await new Promise(resolve => smallCanvas.toBlob(resolve, 'image/jpeg', 1.0))
+        
+        const bgRemovedBlob = await removeBackground(blob, { model: "isnet_quint8" })
+        const imageData = await new Promise(resolve => {
+          const img = new Image()
+          img.onload = () => {
+            const finalCanvas = document.createElement('canvas')
+            finalCanvas.width = img.width
+            finalCanvas.height = img.height
+            const ctx = finalCanvas.getContext('2d')
+            ctx.fillStyle = '#FFFFFF'
+            ctx.fillRect(0, 0, finalCanvas.width, finalCanvas.height)
+            ctx.drawImage(img, 0, 0)
+            resolve({
+              base64: finalCanvas.toDataURL('image/jpeg', 1.0),
+              width: finalCanvas.width,
+              height: finalCanvas.height
+            })
+          }
+          img.src = URL.createObjectURL(bgRemovedBlob)
+        })
 
-        // Grouping logic for multi-page products
-        if (!pendingProduct) {
-            pendingProduct = { blob, text: pageText, pageNum: i };
-        } else {
-            const parsedPrevious = parseText(pendingProduct.text);
-            const hasStyleCode = !!parsedPrevious.style_code;
-            
-            // If previous product is missing key info AND this page has text, it's a continuation
-            if (!hasStyleCode && pageText.length > 10) {
-                pendingProduct.text += " " + pageText;
-            } else {
-                // Process previous product and start a new one
-                await processPendingProduct(pendingProduct);
-                pendingProduct = { blob, text: pageText, pageNum: i };
-            }
-        }
-      }
-      
-      // Process the last pending product
-      if (pendingProduct) {
-          await processPendingProduct(pendingProduct);
+        products.push({
+          color: aiData.color || "",
+          style_code: aiData.style_code || "",
+          mrp: aiData.mrp || "",
+          material: aiData.material || "",
+          sizes: aiData.sizes || "",
+          image_base64: imageData.base64,
+          width: imageData.width,
+          height: imageData.height
+        })
       }
 
       setProgressMsg('Generating Excel file on the server...')
