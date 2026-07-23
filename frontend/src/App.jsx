@@ -191,23 +191,37 @@ function App() {
         setProgressMsg(`Removing background from page ${i}...`)
         
         // Downscale image proportionally before background removal to prevent browser OOM
-        const MAX_DIM = 600
+        const MAX_DIM = 250
         const scale = Math.min(MAX_DIM / imgCanvas.width, MAX_DIM / imgCanvas.height)
         const smallCanvas = document.createElement('canvas')
         const smallCtx = smallCanvas.getContext('2d')
         smallCanvas.width = imgCanvas.width * scale
         smallCanvas.height = imgCanvas.height * scale
+        
+        // Fill white background just in case
+        smallCtx.fillStyle = '#FFFFFF'
+        smallCtx.fillRect(0, 0, smallCanvas.width, smallCanvas.height)
         smallCtx.drawImage(imgCanvas, 0, 0, smallCanvas.width, smallCanvas.height)
         
-        const blob = await new Promise(resolve => smallCanvas.toBlob(resolve, 'image/png'))
+        const blob = await new Promise(resolve => smallCanvas.toBlob(resolve, 'image/jpeg', 0.8))
         
         // Use lightweight quantized model in the browser
         const bgRemovedBlob = await removeBackground(blob, { model: "isnet_quint8" })
         
+        // Convert to a highly compressed JPEG to completely avoid the Vercel 4.5MB limit
         const base64data = await new Promise(resolve => {
-          const reader = new FileReader()
-          reader.onloadend = () => resolve(reader.result)
-          reader.readAsDataURL(bgRemovedBlob)
+          const img = new Image()
+          img.onload = () => {
+            const finalCanvas = document.createElement('canvas')
+            finalCanvas.width = img.width
+            finalCanvas.height = img.height
+            const ctx = finalCanvas.getContext('2d')
+            ctx.fillStyle = '#FFFFFF'
+            ctx.fillRect(0, 0, finalCanvas.width, finalCanvas.height)
+            ctx.drawImage(img, 0, 0)
+            resolve(finalCanvas.toDataURL('image/jpeg', 0.6))
+          }
+          img.src = URL.createObjectURL(bgRemovedBlob)
         })
 
         products.push({
