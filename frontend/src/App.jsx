@@ -15,6 +15,7 @@ function App() {
   const [downloadUrl, setDownloadUrl] = useState('')
   const [progressMsg, setProgressMsg] = useState('')
   const [progress, setProgress] = useState(0)
+  const [eta, setEta] = useState('')
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault()
@@ -55,6 +56,7 @@ function App() {
     setErrorMsg('')
     setProgressMsg('')
     setProgress(0)
+    setEta('')
     if (downloadUrl) {
       URL.revokeObjectURL(downloadUrl)
       setDownloadUrl('')
@@ -146,9 +148,22 @@ function App() {
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
       const products = []
 
+      const startTime = Date.now()
+
       for (let i = 1; i <= pdf.numPages; i++) {
         // Skip first page if multiple pages
         if (i === 1 && pdf.numPages > 1) continue
+
+        const pagesDone = i - (pdf.numPages > 1 ? 2 : 1)
+        if (pagesDone > 0) {
+          const elapsed = Date.now() - startTime
+          const timePerPage = elapsed / pagesDone
+          const pagesLeft = pdf.numPages - i + 1
+          const etaSec = Math.round((timePerPage * pagesLeft) / 1000)
+          const m = Math.floor(etaSec / 60)
+          const s = etaSec % 60
+          setEta(`~${m > 0 ? `${m}m ` : ''}${s}s remaining`)
+        }
 
         setProgressMsg(`Processing page ${i} of ${pdf.numPages}...`)
         setProgress(Math.round(((i - 1) / pdf.numPages) * 100))
@@ -238,6 +253,7 @@ function App() {
 
       setProgressMsg('Generating Excel file on the server...')
       setProgress(100)
+      setEta('')
       const isDev = import.meta.env.DEV
       const apiEndpoint = isDev ? 'http://127.0.0.1:8000/api/generate-excel' : '/api/generate-excel'
       
@@ -317,11 +333,17 @@ function App() {
             <div className="status-box processing">
               <Loader2 className="spinner" size={24} />
               <div className="status-text" style={{ width: '100%' }}>
-                <h4>{progressMsg}</h4>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h4>{progressMsg}</h4>
+                  <span style={{ fontWeight: 'bold', color: '#3b82f6' }}>{progress}%</span>
+                </div>
                 <div className="progress-bar-container" style={{ width: '100%', height: '8px', backgroundColor: '#e2e8f0', borderRadius: '4px', marginTop: '10px', overflow: 'hidden' }}>
                   <div className="progress-bar-fill" style={{ width: `${progress}%`, height: '100%', backgroundColor: '#3b82f6', transition: 'width 0.3s ease' }}></div>
                 </div>
-                <p style={{ marginTop: '8px' }}>This is happening entirely on your computer! No heavy server uploads needed.</p>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontSize: '0.9em', color: '#64748b' }}>
+                  <p>Running entirely on your computer...</p>
+                  {eta && <p style={{ fontWeight: '500' }}>{eta}</p>}
+                </div>
               </div>
             </div>
           )}
