@@ -21,7 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
+@app.get("/api")
 async def health_check():
     return {"status": "healthy"}
 
@@ -39,7 +39,7 @@ class ProductData(BaseModel):
 class ExcelRequest(BaseModel):
     products: List[ProductData]
 
-@app.post("/generate-excel")
+@app.post("/api/generate-excel")
 async def generate_excel(request: ExcelRequest):
     excel_filename = "catalog_output.xlsx"
     workbook = xlsxwriter.Workbook(excel_filename)

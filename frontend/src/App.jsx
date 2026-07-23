@@ -224,12 +224,10 @@ function App() {
 
       setProgressMsg('Generating Excel file on the server...')
       setProgress(100)
-      let apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
-      if (apiBaseUrl && !apiBaseUrl.startsWith('http://') && !apiBaseUrl.startsWith('https://')) {
-        apiBaseUrl = `https://${apiBaseUrl}`
-      }
+      const isDev = import.meta.env.DEV
+      const apiEndpoint = isDev ? 'http://127.0.0.1:8000/api/generate-excel' : '/api/generate-excel'
       
-      const response = await fetch(`${apiBaseUrl}/generate-excel`, {
+      const response = await fetch(apiEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
