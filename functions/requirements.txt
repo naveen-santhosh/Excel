@@ -1,0 +1,5 @@
+firebase-functions>=0.1.0
+firebase-admin>=6.2.0
+Flask>=2.3.0
+xlsxwriter>=3.1.0
+pydantic>=2.0.0

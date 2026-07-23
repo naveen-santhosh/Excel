@@ -1,33 +1,14 @@
 import io
 import base64
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware
+import xlsxwriter
+from firebase_functions import https_fn
+from firebase_admin import initialize_app
 from pydantic import BaseModel
 from typing import List
-import xlsxwriter
+from flask import send_file, jsonify
 
-app = FastAPI()
+initialize_app()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "https://pdf-to-excel-xi-six.vercel.app"
-    ],
-    allow_origin_regex=r"https://pdf-to-excel-.*\.vercel\.app",
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.get("/api")
-async def health_check():
-    return {"status": "healthy"}
-
-# We will instantiate models locally and destroy them to save memory
-
-        
 class ProductData(BaseModel):
     color: str
     style_code: str
@@ -39,10 +20,22 @@ class ProductData(BaseModel):
 class ExcelRequest(BaseModel):
     products: List[ProductData]
 
-@app.post("/api/generate-excel")
-async def generate_excel(request: ExcelRequest):
-    excel_filename = "catalog_output.xlsx"
-    workbook = xlsxwriter.Workbook(excel_filename)
+@https_fn.on_request(cors=https_fn.CorsOptions(cors_origins=["*"], cors_methods=["*"]))
+def generate_excel(req: https_fn.Request) -> https_fn.Response:
+    if req.method == "OPTIONS":
+        return https_fn.Response(status=204)
+        
+    try:
+        data = req.get_json()
+        if not data:
+            return https_fn.Response("No JSON data provided", status=400)
+            
+        request_data = ExcelRequest(**data)
+    except Exception as e:
+        return https_fn.Response(f"Invalid Request: {str(e)}", status=400)
+        
+    output = io.BytesIO()
+    workbook = xlsxwriter.Workbook(output)
     worksheet = workbook.add_worksheet()
     
     headers = ["Image", "Color", "Style code", "MRP", "Material", "Sizes"]
@@ -56,7 +49,7 @@ async def generate_excel(request: ExcelRequest):
     row = 1
     
     try:
-        for product in request.products:
+        for product in request_data.products:
             worksheet.set_row(row, 300)
             
             # Decode base64 image
@@ -88,12 +81,11 @@ async def generate_excel(request: ExcelRequest):
     finally:
         workbook.close()
         
-    return FileResponse(
-        path=excel_filename, 
-        filename="catalog_output.xlsx",
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    output.seek(0)
+    
+    return send_file(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="catalog_output.xlsx"
     )
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
