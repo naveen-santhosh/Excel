@@ -1,13 +1,29 @@
 import io
 import base64
-import xlsxwriter
-from firebase_functions import https_fn
-from firebase_admin import initialize_app
+from fastapi import FastAPI
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
-from flask import send_file, jsonify
+import xlsxwriter
 
-initialize_app()
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "https://pdf-to-excel-xi-six.vercel.app"
+    ],
+    allow_origin_regex=r"https://pdf-to-excel-.*\.vercel\.app",
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/api")
+async def health_check():
+    return {"status": "healthy"}
 
 class ProductData(BaseModel):
     color: str
@@ -20,20 +36,8 @@ class ProductData(BaseModel):
 class ExcelRequest(BaseModel):
     products: List[ProductData]
 
-@https_fn.on_request(cors=https_fn.CorsOptions(cors_origins=["*"], cors_methods=["*"]))
-def generate_excel(req: https_fn.Request) -> https_fn.Response:
-    if req.method == "OPTIONS":
-        return https_fn.Response(status=204)
-        
-    try:
-        data = req.get_json()
-        if not data:
-            return https_fn.Response("No JSON data provided", status=400)
-            
-        request_data = ExcelRequest(**data)
-    except Exception as e:
-        return https_fn.Response(f"Invalid Request: {str(e)}", status=400)
-        
+@app.post("/api/generate-excel")
+async def generate_excel(request: ExcelRequest):
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output)
     worksheet = workbook.add_worksheet()
@@ -49,10 +53,9 @@ def generate_excel(req: https_fn.Request) -> https_fn.Response:
     row = 1
     
     try:
-        for product in request_data.products:
+        for product in request.products:
             worksheet.set_row(row, 300)
             
-            # Decode base64 image
             if product.image_base64.startswith("data:image"):
                 base64_data = product.image_base64.split(",")[1]
             else:
@@ -83,9 +86,15 @@ def generate_excel(req: https_fn.Request) -> https_fn.Response:
         
     output.seek(0)
     
-    return send_file(
+    headers = {
+        'Content-Disposition': 'attachment; filename="catalog_output.xlsx"'
+    }
+    return StreamingResponse(
         output,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        as_attachment=True,
-        download_name="catalog_output.xlsx"
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers
     )
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
