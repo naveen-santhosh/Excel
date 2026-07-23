@@ -46,7 +46,7 @@ async def generate_excel(request: ExcelRequest):
     for col_num, header in enumerate(headers):
         worksheet.write(0, col_num, header)
         
-    worksheet.set_column('A:A', 45)
+    worksheet.set_column('A:A', 60)
     for col in range(1, 6):
         worksheet.set_column(col, col, 25)
 
@@ -54,7 +54,7 @@ async def generate_excel(request: ExcelRequest):
     
     try:
         for product in request.products:
-            worksheet.set_row(row, 300)
+            worksheet.set_row(row, 450)
             
             if product.image_base64.startswith("data:image"):
                 base64_data = product.image_base64.split(",")[1]
@@ -64,7 +64,7 @@ async def generate_excel(request: ExcelRequest):
             image_bytes = base64.b64decode(base64_data)
             img_io = io.BytesIO(image_bytes)
             
-            worksheet.insert_image(row, 0, f"img_{row}.png", {'image_data': img_io, 'x_scale': 0.35, 'y_scale': 0.35, 'positioning': 1})
+            worksheet.insert_image(row, 0, f"img_{row}.png", {'image_data': img_io, 'x_scale': 0.6, 'y_scale': 0.6, 'positioning': 1})
             
             worksheet.write(row, 1, product.color)
             worksheet.write(row, 2, product.style_code)

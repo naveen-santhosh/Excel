@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react'
 import { UploadCloud, FileType, CheckCircle, AlertCircle, Loader2, Download } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
-import Tesseract from 'tesseract.js'
 import { removeBackground } from '@imgly/background-removal'
 import './App.css'
 
@@ -141,14 +140,42 @@ function App() {
     setProgressMsg('Loading PDF...')
 
     try {
-      setProgressMsg('Initializing text recognition engine...')
-      const worker = await Tesseract.createWorker('eng')
-      
       const arrayBuffer = await file.arrayBuffer()
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
       const products = []
 
       const startTime = Date.now()
+      
+      let pendingProduct = null;
+
+      const processPendingProduct = async (prod) => {
+        setProgressMsg(`Removing background for product from page ${prod.pageNum}...`)
+        const bgRemovedBlob = await removeBackground(prod.blob, { model: "isnet_quint8" })
+        const base64data = await new Promise(resolve => {
+          const img = new Image()
+          img.onload = () => {
+            const finalCanvas = document.createElement('canvas')
+            finalCanvas.width = img.width
+            finalCanvas.height = img.height
+            const ctx = finalCanvas.getContext('2d')
+            ctx.fillStyle = '#FFFFFF'
+            ctx.fillRect(0, 0, finalCanvas.width, finalCanvas.height)
+            ctx.drawImage(img, 0, 0)
+            resolve(finalCanvas.toDataURL('image/jpeg', 0.8))
+          }
+          img.src = URL.createObjectURL(bgRemovedBlob)
+        })
+        
+        const parsedData = parseText(prod.text);
+        products.push({
+          color: parsedData.color,
+          style_code: parsedData.style_code,
+          mrp: parsedData.mrp,
+          material: parsedData.material,
+          sizes: parsedData.sizes,
+          image_base64: base64data
+        })
+      };
 
       for (let i = 1; i <= pdf.numPages; i++) {
         // Skip first page if multiple pages
@@ -169,9 +196,14 @@ function App() {
         setProgress(Math.round(((i - 1) / pdf.numPages) * 100))
         
         const page = await pdf.getPage(i)
-        const viewport = page.getViewport({ scale: 2.0 }) // High res
         
-        // Render to canvas
+        // Extract Text Natively (Instant)
+        setProgressMsg(`Extracting text from page ${i}...`)
+        const textContent = await page.getTextContent()
+        let pageText = textContent.items.map(item => item.str).join(' ').trim()
+
+        // Extract Image (Render and Crop)
+        const viewport = page.getViewport({ scale: 2.0 }) // High res
         const canvas = document.createElement('canvas')
         const context = canvas.getContext('2d')
         canvas.width = viewport.width
@@ -179,77 +211,50 @@ function App() {
         
         await page.render({ canvasContext: context, viewport }).promise
 
-        // Crop model image (left 50%)
+        // Crop model image (left 70% to avoid cutting off wider images)
         const imgCanvas = document.createElement('canvas')
         const imgCtx = imgCanvas.getContext('2d')
-        imgCanvas.width = canvas.width * 0.5
+        imgCanvas.width = canvas.width * 0.70
         imgCanvas.height = canvas.height
         imgCtx.drawImage(canvas, 0, 0, imgCanvas.width, imgCanvas.height, 0, 0, imgCanvas.width, imgCanvas.height)
 
-        // Crop text (bottom right)
-        const textCanvas = document.createElement('canvas')
-        const textCtx = textCanvas.getContext('2d')
-        const tWidth = canvas.width * 0.65
-        const tHeight = canvas.height * 0.45
-        textCanvas.width = tWidth
-        textCanvas.height = tHeight
-        
-        // Apply filter to improve OCR accuracy by maximizing contrast
-        textCtx.filter = 'grayscale(100%) contrast(200%) brightness(110%)'
-        textCtx.drawImage(canvas, canvas.width * 0.35, canvas.height * 0.55, tWidth, tHeight, 0, 0, tWidth, tHeight)
-        textCtx.filter = 'none'
-
-        setProgressMsg(`Extracting text from page ${i}...`)
-        const { data: { text } } = await worker.recognize(textCanvas.toDataURL())
-        const parsedData = parseText(text)
-
-        setProgressMsg(`Removing background from page ${i}...`)
-        
-        // Downscale image proportionally before background removal to prevent browser OOM
-        const MAX_DIM = 250
+        // Downscale image proportionally before background removal
+        const MAX_DIM = 400
         const scale = Math.min(MAX_DIM / imgCanvas.width, MAX_DIM / imgCanvas.height)
         const smallCanvas = document.createElement('canvas')
         const smallCtx = smallCanvas.getContext('2d')
         smallCanvas.width = imgCanvas.width * scale
         smallCanvas.height = imgCanvas.height * scale
         
-        // Fill white background just in case
+        // Fill white background
         smallCtx.fillStyle = '#FFFFFF'
         smallCtx.fillRect(0, 0, smallCanvas.width, smallCanvas.height)
         smallCtx.drawImage(imgCanvas, 0, 0, smallCanvas.width, smallCanvas.height)
         
-        const blob = await new Promise(resolve => smallCanvas.toBlob(resolve, 'image/jpeg', 0.8))
-        
-        // Use lightweight quantized model in the browser
-        const bgRemovedBlob = await removeBackground(blob, { model: "isnet_quint8" })
-        
-        // Convert to a highly compressed JPEG to completely avoid the Vercel 4.5MB limit
-        const base64data = await new Promise(resolve => {
-          const img = new Image()
-          img.onload = () => {
-            const finalCanvas = document.createElement('canvas')
-            finalCanvas.width = img.width
-            finalCanvas.height = img.height
-            const ctx = finalCanvas.getContext('2d')
-            ctx.fillStyle = '#FFFFFF'
-            ctx.fillRect(0, 0, finalCanvas.width, finalCanvas.height)
-            ctx.drawImage(img, 0, 0)
-            resolve(finalCanvas.toDataURL('image/jpeg', 0.6))
-          }
-          img.src = URL.createObjectURL(bgRemovedBlob)
-        })
+        const blob = await new Promise(resolve => smallCanvas.toBlob(resolve, 'image/jpeg', 0.9))
 
-        products.push({
-          color: parsedData.color,
-          style_code: parsedData.style_code,
-          mrp: parsedData.mrp,
-          material: parsedData.material,
-          sizes: parsedData.sizes,
-          image_base64: base64data
-        })
+        // Grouping logic for multi-page products
+        if (!pendingProduct) {
+            pendingProduct = { blob, text: pageText, pageNum: i };
+        } else {
+            const parsedPrevious = parseText(pendingProduct.text);
+            const hasStyleCode = !!parsedPrevious.style_code;
+            
+            // If previous product is missing key info AND this page has text, it's a continuation
+            if (!hasStyleCode && pageText.length > 10) {
+                pendingProduct.text += " " + pageText;
+            } else {
+                // Process previous product and start a new one
+                await processPendingProduct(pendingProduct);
+                pendingProduct = { blob, text: pageText, pageNum: i };
+            }
+        }
       }
       
-      await worker.terminate()
+      // Process the last pending product
+      if (pendingProduct) {
+          await processPendingProduct(pendingProduct);
+      }
 
       setProgressMsg('Generating Excel file on the server...')
       setProgress(100)
