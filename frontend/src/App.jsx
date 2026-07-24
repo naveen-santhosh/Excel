@@ -104,10 +104,10 @@ function App() {
         
         await page.render({ canvasContext: context, viewport }).promise
 
-        // Crop left 70% to avoid edge text
+        // Crop left 60% to avoid edge text and side badges
         const imgCanvas = document.createElement('canvas')
         const imgCtx = imgCanvas.getContext('2d')
-        imgCanvas.width = canvas.width * 0.70
+        imgCanvas.width = canvas.width * 0.60
         imgCanvas.height = canvas.height
         imgCtx.drawImage(canvas, 0, 0, imgCanvas.width, imgCanvas.height, 0, 0, imgCanvas.width, imgCanvas.height)
 
@@ -159,13 +159,7 @@ function App() {
                 }
                 
                 setProgressMsg(`Removing background for product on page ${bCtx.pageNum}...`)
-                
-                // Crop left 60% to avoid edge text and side badges
-                const imgCanvas = document.createElement('canvas')
-                const imgCtx = imgCanvas.getContext('2d')
-                imgCanvas.width = bCtx.canvas.width * 0.60
-                imgCanvas.height = bCtx.canvas.height
-                imgCtx.drawImage(bCtx.canvas, 0, 0, imgCanvas.width, imgCanvas.height, 0, 0, imgCanvas.width, imgCanvas.height)
+                const imgCanvas = bCtx.imgCanvas
 
                 // Downscale image for HIGH RES final output (800)
                 const HIGH_RES_DIM = 800
