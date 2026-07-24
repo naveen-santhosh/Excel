@@ -55,7 +55,7 @@ async def extract_info(request: ExtractRequest):
             
         image_bytes = base64.b64decode(base64_data)
         
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         
         prompt = """
         You are an expert data extractor for product catalogs. Analyze the provided catalog page image.
