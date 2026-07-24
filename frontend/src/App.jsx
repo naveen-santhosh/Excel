@@ -104,10 +104,17 @@ function App() {
         
         await page.render({ canvasContext: context, viewport }).promise
 
-        // Send full page image to AI Backend
+        // Crop left 70% to avoid edge text
+        const imgCanvas = document.createElement('canvas')
+        const imgCtx = imgCanvas.getContext('2d')
+        imgCanvas.width = canvas.width * 0.70
+        imgCanvas.height = canvas.height
+        imgCtx.drawImage(canvas, 0, 0, imgCanvas.width, imgCanvas.height, 0, 0, imgCanvas.width, imgCanvas.height)
+
+        // Send full page image to AI Backend (compressed)
         const aiCanvas = document.createElement('canvas')
         const aiCtx = aiCanvas.getContext('2d')
-        const MAX_AI_DIM = 800 // Compress to save bandwidth
+        const MAX_AI_DIM = 800
         const aiScale = Math.min(MAX_AI_DIM / canvas.width, MAX_AI_DIM / canvas.height)
         aiCanvas.width = canvas.width * aiScale
         aiCanvas.height = canvas.height * aiScale
@@ -117,119 +124,110 @@ function App() {
         
         const aiBase64 = aiCanvas.toDataURL('image/jpeg', 0.8)
         
-        const isDev = import.meta.env.DEV
-        const aiEndpoint = isDev ? 'http://127.0.0.1:8000/api/extract-info' : '/api/extract-info'
+        if (!window.batchImages) window.batchImages = []
+        if (!window.batchContexts) window.batchContexts = []
         
-        // Throttle to max 15 requests per minute (1 request every 4 seconds) to avoid Google's API block
-        // Only throttle if we are bursting too fast
-        const now = Date.now();
-        if (window.lastApiCallTime && (now - window.lastApiCallTime) < 4000) {
-            const waitTime = 4000 - (now - window.lastApiCallTime);
-            setProgressMsg(`Pacing API to prevent limits (Page ${i})...`);
-            await new Promise(r => setTimeout(r, waitTime));
-        }
-        window.lastApiCallTime = Date.now();
+        window.batchImages.push(aiBase64)
+        window.batchContexts.push({ pageNum: i, imgCanvas: imgCanvas })
         
-        const aiResponse = await fetch(aiEndpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image_base64: aiBase64 })
-        })
+        const BATCH_SIZE = 15
         
-        if (!aiResponse.ok) {
-            console.warn(`AI extraction failed for page ${i}`)
-            continue;
-        }
-        
-        const aiData = await aiResponse.json()
-        
-        if (!aiData.is_product_page) {
-            console.log(`Page ${i} is not a product page. Skipping.`)
-            // Throttle slightly even for skips to avoid bursting
-            await new Promise(r => setTimeout(r, 1000));
-            continue; // Skip intro pages!
-        }
-        
-        console.log(`Extracted from page ${i}:`, aiData)
-
-        // Process Product Image
-        setProgressMsg(`Removing background for product on page ${i}...`)
-        
-        // Crop left 70% to avoid edge text
-        const imgCanvas = document.createElement('canvas')
-        const imgCtx = imgCanvas.getContext('2d')
-        imgCanvas.width = canvas.width * 0.70
-        imgCanvas.height = canvas.height
-        imgCtx.drawImage(canvas, 0, 0, imgCanvas.width, imgCanvas.height, 0, 0, imgCanvas.width, imgCanvas.height)
-
-        // Downscale image for HIGH RES final output (800)
-        const HIGH_RES_DIM = 800
-        const hrScale = Math.min(1, Math.min(HIGH_RES_DIM / imgCanvas.width, HIGH_RES_DIM / imgCanvas.height))
-        const hrCanvas = document.createElement('canvas')
-        const hrCtx = hrCanvas.getContext('2d')
-        hrCanvas.width = imgCanvas.width * hrScale
-        hrCanvas.height = imgCanvas.height * hrScale
-        hrCtx.fillStyle = '#FFFFFF'
-        hrCtx.fillRect(0, 0, hrCanvas.width, hrCanvas.height)
-        hrCtx.drawImage(imgCanvas, 0, 0, hrCanvas.width, hrCanvas.height)
-
-        // Downscale image drastically for FAST background removal (256)
-        const FAST_DIM = 256
-        const lrScale = Math.min(1, Math.min(FAST_DIM / imgCanvas.width, FAST_DIM / imgCanvas.height))
-        const lrCanvas = document.createElement('canvas')
-        const lrCtx = lrCanvas.getContext('2d')
-        lrCanvas.width = imgCanvas.width * lrScale
-        lrCanvas.height = imgCanvas.height * lrScale
-        lrCtx.fillStyle = '#FFFFFF'
-        lrCtx.fillRect(0, 0, lrCanvas.width, lrCanvas.height)
-        lrCtx.drawImage(imgCanvas, 0, 0, lrCanvas.width, lrCanvas.height)
-        
-        // Feed the fast low-res image to the AI model
-        const blob = await new Promise(resolve => lrCanvas.toBlob(resolve, 'image/jpeg', 0.8))
-        
-        const bgRemovedBlob = await removeBackground(blob, { model: "isnet_quint8" })
-        const finalUrl = URL.createObjectURL(bgRemovedBlob)
-        const imageData = await new Promise(resolve => {
-          const img = new Image()
-          img.onload = () => {
-            const finalCanvas = document.createElement('canvas')
-            const finalCtx = finalCanvas.getContext('2d')
+        if (window.batchImages.length === BATCH_SIZE || i === pdf.numPages) {
+            setProgressMsg(`Analyzing batch of ${window.batchImages.length} pages with AI...`)
+            const isDev = import.meta.env.DEV
+            const aiEndpoint = isDev ? 'http://127.0.0.1:8000/api/extract-info-batch' : '/api/extract-info-batch'
             
-            // Keep the final dimensions high-res
-            finalCanvas.width = hrCanvas.width
-            finalCanvas.height = hrCanvas.height
-            
-            // 1. Draw the high-res image
-            finalCtx.drawImage(hrCanvas, 0, 0)
-            
-            // 2. Mask it with the low-res AI mask (stretched to fit)
-            finalCtx.globalCompositeOperation = 'destination-in'
-            finalCtx.drawImage(img, 0, 0, finalCanvas.width, finalCanvas.height)
-            
-            // 3. Draw a clean white background behind the cut-out product
-            finalCtx.globalCompositeOperation = 'destination-over'
-            finalCtx.fillStyle = '#FFFFFF'
-            finalCtx.fillRect(0, 0, finalCanvas.width, finalCanvas.height)
-            
-            resolve({
-              base64: finalCanvas.toDataURL('image/jpeg', 0.95),
-              width: finalCanvas.width,
-              height: finalCanvas.height
+            const aiResponse = await fetch(aiEndpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ images_base64: window.batchImages })
             })
-          }
-          img.src = finalUrl
-        })
+            
+            let batchResults = []
+            if (aiResponse.ok) {
+                const data = await aiResponse.json()
+                batchResults = data.results || []
+            }
+            
+            for (let j = 0; j < window.batchContexts.length; j++) {
+                const bCtx = window.batchContexts[j]
+                const aiData = batchResults[j] || { is_product_page: false }
+                
+                if (!aiData.is_product_page) {
+                    console.log(`Page ${bCtx.pageNum} is not a product page. Skipping.`)
+                    continue;
+                }
+                
+                setProgressMsg(`Removing background for product on page ${bCtx.pageNum}...`)
+                const bImgCanvas = bCtx.imgCanvas
+                
+                // Downscale image for HIGH RES final output (800)
+                const HIGH_RES_DIM = 800
+                const hrScale = Math.min(1, Math.min(HIGH_RES_DIM / bImgCanvas.width, HIGH_RES_DIM / bImgCanvas.height))
+                const hrCanvas = document.createElement('canvas')
+                const hrCtx = hrCanvas.getContext('2d')
+                hrCanvas.width = bImgCanvas.width * hrScale
+                hrCanvas.height = bImgCanvas.height * hrScale
+                hrCtx.fillStyle = '#FFFFFF'
+                hrCtx.fillRect(0, 0, hrCanvas.width, hrCanvas.height)
+                hrCtx.drawImage(bImgCanvas, 0, 0, hrCanvas.width, hrCanvas.height)
 
-        products.push({
-          color: aiData.color || "",
-          style_code: aiData.style_code || "",
-          mrp: aiData.mrp || "",
-          material: aiData.material || "",
-          sizes: aiData.sizes || "",
-          image_base64: imageData.base64,
-          width: imageData.width,
-          height: imageData.height
-        })
+                // Downscale image drastically for FAST background removal (256)
+                const FAST_DIM = 256
+                const lrScale = Math.min(1, Math.min(FAST_DIM / bImgCanvas.width, FAST_DIM / bImgCanvas.height))
+                const lrCanvas = document.createElement('canvas')
+                const lrCtx = lrCanvas.getContext('2d')
+                lrCanvas.width = bImgCanvas.width * lrScale
+                lrCanvas.height = bImgCanvas.height * lrScale
+                lrCtx.fillStyle = '#FFFFFF'
+                lrCtx.fillRect(0, 0, lrCanvas.width, lrCanvas.height)
+                lrCtx.drawImage(bImgCanvas, 0, 0, lrCanvas.width, lrCanvas.height)
+                
+                const blob = await new Promise(resolve => lrCanvas.toBlob(resolve, 'image/jpeg', 0.8))
+                const bgRemovedBlob = await removeBackground(blob, { model: "isnet_quint8" })
+                const finalUrl = URL.createObjectURL(bgRemovedBlob)
+                
+                const imageData = await new Promise(resolve => {
+                  const img = new Image()
+                  img.onload = () => {
+                    const finalCanvas = document.createElement('canvas')
+                    const finalCtx = finalCanvas.getContext('2d')
+                    finalCanvas.width = hrCanvas.width
+                    finalCanvas.height = hrCanvas.height
+                    
+                    finalCtx.drawImage(hrCanvas, 0, 0)
+                    finalCtx.globalCompositeOperation = 'destination-in'
+                    finalCtx.drawImage(img, 0, 0, finalCanvas.width, finalCanvas.height)
+                    
+                    finalCtx.globalCompositeOperation = 'destination-over'
+                    finalCtx.fillStyle = '#FFFFFF'
+                    finalCtx.fillRect(0, 0, finalCanvas.width, finalCanvas.height)
+                    
+                    resolve({
+                      base64: finalCanvas.toDataURL('image/jpeg', 0.95),
+                      width: finalCanvas.width,
+                      height: finalCanvas.height
+                    })
+                  }
+                  img.src = finalUrl
+                })
+
+                products.push({
+                  color: aiData.color || "",
+                  style_code: aiData.style_code || "",
+                  mrp: aiData.mrp || "",
+                  material: aiData.material || "",
+                  sizes: aiData.sizes || "",
+                  image_base64: imageData.base64,
+                  width: imageData.width,
+                  height: imageData.height
+                })
+            }
+            
+            // Clear batch
+            window.batchImages = []
+            window.batchContexts = []
+        }
       }
 
       setProgressMsg('Generating Excel file on the server...')
