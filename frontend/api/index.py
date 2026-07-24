@@ -128,7 +128,7 @@ class BatchExtractedInfo(BaseModel):
 @app.post("/api/extract-info-batch", response_model=BatchExtractedInfo)
 async def extract_info_batch(request: BatchExtractRequest):
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-flash-latest")
         
         contents = []
         for img_b64 in request.images_base64:
