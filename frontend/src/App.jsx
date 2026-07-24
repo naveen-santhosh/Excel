@@ -162,39 +162,62 @@ function App() {
         imgCanvas.height = canvas.height
         imgCtx.drawImage(canvas, 0, 0, imgCanvas.width, imgCanvas.height, 0, 0, imgCanvas.width, imgCanvas.height)
 
-        // Downscale image proportionally before background removal
-        // 800 is the sweet spot: high quality for Excel, but fast enough for local browser processing
-        const MAX_DIM = 800
-        const scale = Math.min(1, Math.min(MAX_DIM / imgCanvas.width, MAX_DIM / imgCanvas.height))
-        const smallCanvas = document.createElement('canvas')
-        const smallCtx = smallCanvas.getContext('2d')
-        smallCanvas.width = imgCanvas.width * scale
-        smallCanvas.height = imgCanvas.height * scale
+        // Downscale image for HIGH RES final output (800)
+        const HIGH_RES_DIM = 800
+        const hrScale = Math.min(1, Math.min(HIGH_RES_DIM / imgCanvas.width, HIGH_RES_DIM / imgCanvas.height))
+        const hrCanvas = document.createElement('canvas')
+        const hrCtx = hrCanvas.getContext('2d')
+        hrCanvas.width = imgCanvas.width * hrScale
+        hrCanvas.height = imgCanvas.height * hrScale
+        hrCtx.fillStyle = '#FFFFFF'
+        hrCtx.fillRect(0, 0, hrCanvas.width, hrCanvas.height)
+        hrCtx.drawImage(imgCanvas, 0, 0, hrCanvas.width, hrCanvas.height)
+
+        // Downscale image drastically for FAST background removal (256)
+        const FAST_DIM = 256
+        const lrScale = Math.min(1, Math.min(FAST_DIM / imgCanvas.width, FAST_DIM / imgCanvas.height))
+        const lrCanvas = document.createElement('canvas')
+        const lrCtx = lrCanvas.getContext('2d')
+        lrCanvas.width = imgCanvas.width * lrScale
+        lrCanvas.height = imgCanvas.height * lrScale
+        lrCtx.fillStyle = '#FFFFFF'
+        lrCtx.fillRect(0, 0, lrCanvas.width, lrCanvas.height)
+        lrCtx.drawImage(imgCanvas, 0, 0, lrCanvas.width, lrCanvas.height)
         
-        smallCtx.fillStyle = '#FFFFFF'
-        smallCtx.fillRect(0, 0, smallCanvas.width, smallCanvas.height)
-        smallCtx.drawImage(imgCanvas, 0, 0, smallCanvas.width, smallCanvas.height)
-        
-        const blob = await new Promise(resolve => smallCanvas.toBlob(resolve, 'image/jpeg', 1.0))
+        // Feed the fast low-res image to the AI model
+        const blob = await new Promise(resolve => lrCanvas.toBlob(resolve, 'image/jpeg', 0.8))
         
         const bgRemovedBlob = await removeBackground(blob, { model: "isnet_quint8" })
+        const finalUrl = URL.createObjectURL(bgRemovedBlob)
         const imageData = await new Promise(resolve => {
           const img = new Image()
           img.onload = () => {
             const finalCanvas = document.createElement('canvas')
-            finalCanvas.width = img.width
-            finalCanvas.height = img.height
-            const ctx = finalCanvas.getContext('2d')
-            ctx.fillStyle = '#FFFFFF'
-            ctx.fillRect(0, 0, finalCanvas.width, finalCanvas.height)
-            ctx.drawImage(img, 0, 0)
+            const finalCtx = finalCanvas.getContext('2d')
+            
+            // Keep the final dimensions high-res
+            finalCanvas.width = hrCanvas.width
+            finalCanvas.height = hrCanvas.height
+            
+            // 1. Draw the high-res image
+            finalCtx.drawImage(hrCanvas, 0, 0)
+            
+            // 2. Mask it with the low-res AI mask (stretched to fit)
+            finalCtx.globalCompositeOperation = 'destination-in'
+            finalCtx.drawImage(img, 0, 0, finalCanvas.width, finalCanvas.height)
+            
+            // 3. Draw a clean white background behind the cut-out product
+            finalCtx.globalCompositeOperation = 'destination-over'
+            finalCtx.fillStyle = '#FFFFFF'
+            finalCtx.fillRect(0, 0, finalCanvas.width, finalCanvas.height)
+            
             resolve({
-              base64: finalCanvas.toDataURL('image/jpeg', 1.0),
+              base64: finalCanvas.toDataURL('image/jpeg', 0.95),
               width: finalCanvas.width,
               height: finalCanvas.height
             })
           }
-          img.src = URL.createObjectURL(bgRemovedBlob)
+          img.src = finalUrl
         })
 
         products.push({
