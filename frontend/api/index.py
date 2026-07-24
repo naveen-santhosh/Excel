@@ -55,7 +55,7 @@ async def extract_info(request: ExtractRequest):
             
         image_bytes = base64.b64decode(base64_data)
         
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         
         prompt = """
         You are an expert data extractor for product catalogs. Analyze the provided catalog page image.
@@ -74,10 +74,28 @@ async def extract_info(request: ExtractRequest):
         }
         """
         
-        response = model.generate_content([
-            {'mime_type': 'image/jpeg', 'data': image_bytes},
-            prompt
-        ])
+        import time
+        max_retries = 5
+        base_delay = 20
+        response = None
+        
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content([
+                    {'mime_type': 'image/jpeg', 'data': image_bytes},
+                    prompt
+                ])
+                break
+            except Exception as e:
+                error_msg = str(e)
+                if "Quota exceeded" in error_msg or "429" in error_msg:
+                    if attempt == max_retries - 1:
+                        raise
+                    print(f"Rate limit exceeded (attempt {attempt+1}/{max_retries}). Retrying in {base_delay} seconds...")
+                    time.sleep(base_delay)
+                    base_delay *= 1.5
+                else:
+                    raise
         
         text = response.text.strip()
         if text.startswith("```json"):

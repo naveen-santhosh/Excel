@@ -135,6 +135,8 @@ function App() {
         
         if (!aiData.is_product_page) {
             console.log(`Page ${i} is not a product page. Skipping.`)
+            // Throttle slightly even for skips to avoid bursting
+            await new Promise(r => setTimeout(r, 1000));
             continue; // Skip intro pages!
         }
         
@@ -150,8 +152,9 @@ function App() {
         imgCanvas.height = canvas.height
         imgCtx.drawImage(canvas, 0, 0, imgCanvas.width, imgCanvas.height, 0, 0, imgCanvas.width, imgCanvas.height)
 
-        // Downscale image proportionally before background removal (Increased for high quality)
-        const MAX_DIM = 1600
+        // Downscale image proportionally before background removal
+        // 800 is the sweet spot: high quality for Excel, but fast enough for local browser processing
+        const MAX_DIM = 800
         const scale = Math.min(1, Math.min(MAX_DIM / imgCanvas.width, MAX_DIM / imgCanvas.height))
         const smallCanvas = document.createElement('canvas')
         const smallCtx = smallCanvas.getContext('2d')
