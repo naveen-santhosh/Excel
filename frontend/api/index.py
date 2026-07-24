@@ -119,6 +119,95 @@ async def extract_info(request: ExtractRequest):
         traceback.print_exc()
         return ExtractedInfo(is_product_page=False)
 
+class BatchExtractRequest(BaseModel):
+    images_base64: List[str]
+
+class BatchExtractedInfo(BaseModel):
+    results: List[ExtractedInfo]
+
+@app.post("/api/extract-info-batch", response_model=BatchExtractedInfo)
+async def extract_info_batch(request: BatchExtractRequest):
+    try:
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        
+        contents = []
+        for img_b64 in request.images_base64:
+            if img_b64.startswith("data:image"):
+                b64_data = img_b64.split(",")[1]
+            else:
+                b64_data = img_b64
+            img_bytes = base64.b64decode(b64_data)
+            contents.append({'mime_type': 'image/jpeg', 'data': img_bytes})
+            
+        prompt = f"""
+        You are an expert data extractor for product catalogs. Analyze the provided {len(contents)} catalog page images in the exact order they are provided.
+        1. Determine if each page is a "product page". Introductory pages, brand story pages, or purely lifestyle images without specs are NOT product pages.
+        2. If it IS a product page, extract exact values for: color, style_code, mrp, material, sizes. If missing, use an empty string.
+        3. If it is NOT a product page, set "is_product_page" to false and leave all other fields empty.
+
+        Return ONLY a valid JSON ARRAY containing exactly {len(contents)} objects in the same order as the images, matching this exact schema:
+        [
+          {{
+            "is_product_page": boolean,
+            "color": "string",
+            "style_code": "string",
+            "mrp": "string",
+            "material": "string",
+            "sizes": "string"
+          }}
+        ]
+        Do not use markdown formatting or backticks. Just the raw JSON array.
+        """
+        
+        contents.append(prompt)
+        
+        import time
+        max_retries = 5
+        base_delay = 20
+        response = None
+        
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(contents)
+                break
+            except Exception as e:
+                error_msg = str(e)
+                if "Quota exceeded" in error_msg or "429" in error_msg:
+                    if attempt == max_retries - 1:
+                        raise
+                    print(f"Rate limit exceeded on batch (attempt {attempt+1}/{max_retries}). Retrying in {base_delay} seconds...")
+                    time.sleep(base_delay)
+                    base_delay *= 1.5
+                else:
+                    raise
+        
+        text = response.text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.endswith("```"):
+            text = text[:-3]
+            
+        data = json.loads(text.strip())
+        
+        results = []
+        for item in data:
+            results.append(ExtractedInfo(
+                is_product_page=item.get("is_product_page", False),
+                color=str(item.get("color", "")),
+                style_code=str(item.get("style_code", "")),
+                mrp=str(item.get("mrp", "")),
+                material=str(item.get("material", "")),
+                sizes=str(item.get("sizes", ""))
+            ))
+            
+        return BatchExtractedInfo(results=results)
+        
+    except Exception as e:
+        print(f"Batch Extraction error: {e}")
+        traceback.print_exc()
+        # Return all false if batch fails
+        return BatchExtractedInfo(results=[ExtractedInfo(is_product_page=False) for _ in request.images_base64])
+
 class ProductData(BaseModel):
     color: str
     style_code: str
