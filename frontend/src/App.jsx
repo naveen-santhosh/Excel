@@ -120,6 +120,16 @@ function App() {
         const isDev = import.meta.env.DEV
         const aiEndpoint = isDev ? 'http://127.0.0.1:8000/api/extract-info' : '/api/extract-info'
         
+        // Throttle to max 15 requests per minute (1 request every 4 seconds) to avoid Google's API block
+        // Only throttle if we are bursting too fast
+        const now = Date.now();
+        if (window.lastApiCallTime && (now - window.lastApiCallTime) < 4000) {
+            const waitTime = 4000 - (now - window.lastApiCallTime);
+            setProgressMsg(`Pacing API to prevent limits (Page ${i})...`);
+            await new Promise(r => setTimeout(r, waitTime));
+        }
+        window.lastApiCallTime = Date.now();
+        
         const aiResponse = await fetch(aiEndpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
