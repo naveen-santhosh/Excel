@@ -44,6 +44,7 @@ class ExtractedInfo(BaseModel):
     mrp: str = ""
     material: str = ""
     sizes: str = ""
+    item_box: Optional[List[float]] = None
 
 @app.post("/api/extract-info", response_model=ExtractedInfo)
 async def extract_info(request: ExtractRequest):
@@ -55,22 +56,24 @@ async def extract_info(request: ExtractRequest):
             
         image_bytes = base64.b64decode(base64_data)
         
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         
         prompt = """
         You are an expert data extractor for product catalogs. Analyze the provided catalog page image.
         1. Determine if this is a "product page". A product page contains a specific product with specs (e.g., Color, Style Code, MRP, Material, Sizes). Introductory pages, brand story pages, or purely lifestyle images without specs are NOT product pages.
-        2. If it IS a product page, extract the exact values for the following fields. If a field is missing, leave it as an empty string.
-        3. If it is NOT a product page, set "is_product_page" to false and leave all other fields empty.
+        2. If it IS a product page, extract exact values for: color, style_code, mrp, material, sizes. If missing, leave as empty string.
+        3. ALSO identify the primary product item or model/person wearing the product on each page. Provide `item_box`: [ymin, xmin, ymax, xmax] as percentage numbers from 0 to 100 outlining the FULL product item AND model (including head, face, hair, body, and garment), strictly excluding text, specs tables, price badges, logos, sidebars, design boxes, or card borders. DO NOT cut off the head or face of the model.
+        4. If it is NOT a product page, set "is_product_page" to false and leave all other fields empty.
 
-        Return ONLY a valid JSON object matching this exact schema, with no markdown formatting or backticks:
+        Return ONLY a valid JSON object matching this exact schema:
         {
           "is_product_page": boolean,
           "color": "string",
           "style_code": "string",
           "mrp": "string",
           "material": "string",
-          "sizes": "string"
+          "sizes": "string",
+          "item_box": [ymin, xmin, ymax, xmax]
         }
         """
         
@@ -105,13 +108,23 @@ async def extract_info(request: ExtractRequest):
             
         data = json.loads(text.strip())
         
+        item_box = data.get("item_box")
+        if isinstance(item_box, list) and len(item_box) == 4:
+            try:
+                item_box = [float(v) for v in item_box]
+            except Exception:
+                item_box = None
+        else:
+            item_box = None
+
         return ExtractedInfo(
             is_product_page=data.get("is_product_page", False),
             color=str(data.get("color", "")),
             style_code=str(data.get("style_code", "")),
             mrp=str(data.get("mrp", "")),
             material=str(data.get("material", "")),
-            sizes=str(data.get("sizes", ""))
+            sizes=str(data.get("sizes", "")),
+            item_box=item_box
         )
         
     except Exception as e:
@@ -128,7 +141,7 @@ class BatchExtractedInfo(BaseModel):
 @app.post("/api/extract-info-batch", response_model=BatchExtractedInfo)
 async def extract_info_batch(request: BatchExtractRequest):
     try:
-        model = genai.GenerativeModel("gemini-flash-latest")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         
         contents = []
         for img_b64 in request.images_base64:
@@ -142,8 +155,9 @@ async def extract_info_batch(request: BatchExtractRequest):
         prompt = f"""
         You are an expert data extractor for product catalogs. Analyze the provided {len(contents)} catalog page images in the exact order they are provided.
         1. Determine if each page is a "product page". Introductory pages, brand story pages, or purely lifestyle images without specs are NOT product pages.
-        2. If it IS a product page, extract exact values for: color, style_code, mrp, material, sizes. If missing, use an empty string.
-        3. If it is NOT a product page, set "is_product_page" to false and leave all other fields empty.
+        2. If it IS a product page, extract exact values for: color, style_code, mrp, material, sizes. If missing, use empty string.
+        3. ALSO locate the primary product item or model/person wearing the product on each page. Provide `item_box`: [ymin, xmin, ymax, xmax] as percentage numbers from 0 to 100 outlining the FULL product item AND model (including head, face, hair, body, and garment), strictly avoiding text, specs tables, price tags, brand logos, sidebars, design boxes, or card borders. DO NOT cut off the head or face of the model.
+        4. If NOT a product page, set "is_product_page" to false and leave all other fields empty.
 
         Return ONLY a valid JSON ARRAY containing exactly {len(contents)} objects in the same order as the images, matching this exact schema:
         [
@@ -153,7 +167,8 @@ async def extract_info_batch(request: BatchExtractRequest):
             "style_code": "string",
             "mrp": "string",
             "material": "string",
-            "sizes": "string"
+            "sizes": "string",
+            "item_box": [ymin, xmin, ymax, xmax]
           }}
         ]
         Do not use markdown formatting or backticks. Just the raw JSON array.
@@ -191,13 +206,23 @@ async def extract_info_batch(request: BatchExtractRequest):
         
         results = []
         for item in data:
+            item_box = item.get("item_box")
+            if isinstance(item_box, list) and len(item_box) == 4:
+                try:
+                    item_box = [float(v) for v in item_box]
+                except Exception:
+                    item_box = None
+            else:
+                item_box = None
+
             results.append(ExtractedInfo(
                 is_product_page=item.get("is_product_page", False),
                 color=str(item.get("color", "")),
                 style_code=str(item.get("style_code", "")),
                 mrp=str(item.get("mrp", "")),
                 material=str(item.get("material", "")),
-                sizes=str(item.get("sizes", ""))
+                sizes=str(item.get("sizes", "")),
+                item_box=item_box
             ))
             
         return BatchExtractedInfo(results=results)
@@ -227,13 +252,48 @@ async def generate_excel(request: ExcelRequest):
     workbook = xlsxwriter.Workbook(output)
     worksheet = workbook.add_worksheet()
     
+    # Define formats for larger text and clean alignment
+    header_format = workbook.add_format({
+        'bold': True,
+        'font_size': 18,
+        'font_name': 'Segoe UI',
+        'font_color': '#FFFFFF',
+        'bg_color': '#4F46E5',
+        'align': 'center',
+        'valign': 'vcenter',
+        'border': 1
+    })
+
+    data_format = workbook.add_format({
+        'font_size': 16,
+        'font_name': 'Segoe UI',
+        'font_color': '#0F172A',
+        'align': 'center',
+        'valign': 'vcenter',
+        'text_wrap': True,
+        'border': 1
+    })
+
+    bold_data_format = workbook.add_format({
+        'bold': True,
+        'font_size': 16,
+        'font_name': 'Segoe UI',
+        'font_color': '#0F172A',
+        'align': 'center',
+        'valign': 'vcenter',
+        'text_wrap': True,
+        'border': 1
+    })
+
+    worksheet.set_row(0, 35)
+
     headers = ["Image", "Color", "Style code", "MRP", "Material", "Sizes"]
     for col_num, header in enumerate(headers):
-        worksheet.write(0, col_num, header)
+        worksheet.write(0, col_num, header, header_format)
         
     worksheet.set_column('A:A', 60)
     for col in range(1, 6):
-        worksheet.set_column(col, col, 25)
+        worksheet.set_column(col, col, 30)
 
     row = 1
     
@@ -252,7 +312,6 @@ async def generate_excel(request: ExcelRequest):
             x_scale = 0.6
             y_scale = 0.6
             if product.width and product.height:
-                # Cell width 60 is approx 420 pixels, height 450 is approx 600 pixels
                 target_width = 400.0
                 target_height = 580.0
                 scale_w = target_width / product.width
@@ -263,11 +322,11 @@ async def generate_excel(request: ExcelRequest):
             
             worksheet.insert_image(row, 0, f"img_{row}.png", {'image_data': img_io, 'x_scale': x_scale, 'y_scale': y_scale, 'positioning': 1})
             
-            worksheet.write(row, 1, product.color)
-            worksheet.write(row, 2, product.style_code)
-            worksheet.write(row, 3, product.mrp)
-            worksheet.write(row, 4, product.material)
-            worksheet.write(row, 5, product.sizes)
+            worksheet.write(row, 1, product.color, data_format)
+            worksheet.write(row, 2, product.style_code, bold_data_format)
+            worksheet.write(row, 3, product.mrp, bold_data_format)
+            worksheet.write(row, 4, product.material, data_format)
+            worksheet.write(row, 5, product.sizes, data_format)
             
             row += 1
             
@@ -276,8 +335,8 @@ async def generate_excel(request: ExcelRequest):
         err_msg = f"Error: {str(e)}"
         print(err_msg)
         traceback.print_exc()
-        worksheet.write(row, 0, "An error occurred during processing!")
-        worksheet.write(row + 1, 0, err_msg)
+        worksheet.write(row, 0, "An error occurred during processing!", data_format)
+        worksheet.write(row + 1, 0, err_msg, data_format)
     finally:
         workbook.close()
         
