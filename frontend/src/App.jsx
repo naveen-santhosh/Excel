@@ -4,7 +4,40 @@ import * as pdfjsLib from 'pdfjs-dist'
 import { removeBackground } from '@imgly/background-removal'
 import './App.css'
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`
+// Helper to crop canvas based on item_box bounding box percentage [ymin, xmin, ymax, xmax]
+function getCroppedItemCanvas(fullCanvas, itemBox) {
+  const fw = fullCanvas.width
+  const fh = fullCanvas.height
+
+  let ymin = 0, xmin = 0, ymax = 100, xmax = 100
+
+  if (Array.isArray(itemBox) && itemBox.length === 4) {
+    [ymin, xmin, ymax, xmax] = itemBox
+    // Expand margins slightly (4%) so full item is included without clipping
+    const padY = Math.max(3, (ymax - ymin) * 0.04)
+    const padX = Math.max(3, (xmax - xmin) * 0.04)
+    if (ymin < 45) {
+      ymin = 0
+    } else {
+      ymin = Math.max(0, ymin - padY)
+    }
+    xmin = Math.max(0, xmin - padX)
+    ymax = Math.min(100, ymax + padY)
+    xmax = Math.min(100, xmax + padX)
+  }
+
+  const cx = Math.round((xmin / 100) * fw)
+  const cy = Math.round((ymin / 100) * fh)
+  const cw = Math.max(30, Math.round(((xmax - xmin) / 100) * fw))
+  const ch = Math.max(30, Math.round(((ymax - ymin) / 100) * fh))
+
+  const cCanvas = document.createElement('canvas')
+  cCanvas.width = cw
+  cCanvas.height = ch
+  const ctx = cCanvas.getContext('2d')
+  ctx.drawImage(fullCanvas, cx, cy, cw, ch, 0, 0, cw, ch)
+  return cCanvas
+}
 
 function App() {
   const [file, setFile] = useState(null)
@@ -128,7 +161,7 @@ function App() {
         if (!window.batchContexts) window.batchContexts = []
         
         window.batchImages.push(aiBase64)
-        window.batchContexts.push({ pageNum: i, imgCanvas: imgCanvas })
+        window.batchContexts.push({ pageNum: i, fullCanvas: canvas })
         
         const BATCH_SIZE = 15
         
@@ -159,7 +192,9 @@ function App() {
                 }
                 
                 setProgressMsg(`Removing background for product on page ${bCtx.pageNum}...`)
-                const imgCanvas = bCtx.imgCanvas
+                
+                // Crop canvas specifically to detected product item bounding box across full page width
+                const imgCanvas = getCroppedItemCanvas(bCtx.fullCanvas, aiData.item_box)
 
                 // Downscale image for HIGH RES final output (800)
                 const HIGH_RES_DIM = 800

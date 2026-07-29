@@ -59,10 +59,15 @@ async def extract_info(request: ExtractRequest):
         model = genai.GenerativeModel("gemini-2.5-flash")
         
         prompt = """
-        You are an expert data extractor for product catalogs. Analyze the provided catalog page image.
-        1. Determine if this is a "product page". A product page contains a specific product with specs (e.g., Color, Style Code, MRP, Material, Sizes). Introductory pages, brand story pages, or purely lifestyle images without specs are NOT product pages.
-        2. If it IS a product page, extract exact values for: color, style_code, mrp, material, sizes. If missing, leave as empty string.
-        3. ALSO identify the primary product item or model/person wearing the product on each page. Provide `item_box`: [ymin, xmin, ymax, xmax] as percentage numbers from 0 to 100 outlining the FULL product item AND model (including head, face, hair, body, and garment), strictly excluding text, specs tables, price badges, logos, sidebars, design boxes, or card borders. DO NOT cut off the head or face of the model.
+        You are an expert data extractor for commercial product & corporate gift catalogs (such as FUZO, stationery, gadgets & electronics, kitchenware & utensils, bags & backpacks, home decor, and office utilities). Analyze the provided catalog page image.
+        1. Determine if this is a "product page". A page showcasing a specific product item (e.g. lamp, charger, clock, bottle, mug, notebook, pen, backpack, speaker, organizer, tool) with a product title or features IS A PRODUCT PAGE. Only cover pages, table of contents, pure lifestyle banners without products, or copyright back covers are NOT product pages.
+        2. Extract exact values for:
+           - style_code: Main Product Title / Model Name / SKU / Item Code (e.g. "TRINITY", "VIVID", "ROVER", "CASA", "BREWSTER", "CANETA", "BEACON", "THE CUSTODIAN"). If a dedicated code is not listed, use the main Product Name Title!
+           - material: Product Subtitle / Description / Features (e.g., "3 in 1 Portable Wireless Charging Station", "Borosilicate Glass Bottle with Hydration Reminder", "Metal Pen with Bamboo Grip", "6 in 1: Multi-Functional Bamboo Desk Utility").
+           - color: Color / Finish if mentioned (or empty string if missing).
+           - mrp: MRP / Price if mentioned (or empty string if missing).
+           - sizes: Sizes / Dimensions / Capacity / Pack Qty if mentioned (or empty string if missing).
+        3. ALSO locate the primary physical product object(s) or model holding it on the page. Provide `item_box`: [ymin, xmin, ymax, xmax] as percentage numbers from 0 to 100 outlining ONLY the physical product object(s) in the image, strictly excluding the brand logo at the top (e.g. "FUZO"), product title text, header/footer text, and bottom social/website URLs.
         4. If it is NOT a product page, set "is_product_page" to false and leave all other fields empty.
 
         Return ONLY a valid JSON object matching this exact schema:
@@ -153,10 +158,15 @@ async def extract_info_batch(request: BatchExtractRequest):
             contents.append({'mime_type': 'image/jpeg', 'data': img_bytes})
             
         prompt = f"""
-        You are an expert data extractor for product catalogs. Analyze the provided {len(contents)} catalog page images in the exact order they are provided.
-        1. Determine if each page is a "product page". Introductory pages, brand story pages, or purely lifestyle images without specs are NOT product pages.
-        2. If it IS a product page, extract exact values for: color, style_code, mrp, material, sizes. If missing, use empty string.
-        3. ALSO locate the primary product item or model/person wearing the product on each page. Provide `item_box`: [ymin, xmin, ymax, xmax] as percentage numbers from 0 to 100 outlining the FULL product item AND model (including head, face, hair, body, and garment), strictly avoiding text, specs tables, price tags, brand logos, sidebars, design boxes, or card borders. DO NOT cut off the head or face of the model.
+        You are an expert data extractor for commercial product & corporate gift catalogs (such as FUZO, stationery, gadgets & electronics, kitchenware & utensils, bags & backpacks, home decor, and office utilities). Analyze the provided {len(contents)} catalog page images in the exact order they are provided.
+        1. Determine if each page is a "product page". A page showcasing a specific product item (e.g. lamp, charger, clock, bottle, mug, notebook, pen, backpack, speaker, organizer, tool) with a product title or features IS A PRODUCT PAGE. Only cover pages, table of contents, pure lifestyle banners without products, or copyright back covers are NOT product pages.
+        2. Extract exact values for:
+           - style_code: Main Product Title / Model Name / SKU / Item Code (e.g. "TRINITY", "VIVID", "ROVER", "CASA", "BREWSTER", "CANETA", "BEACON", "THE CUSTODIAN"). Use the main Product Name Title!
+           - material: Product Subtitle / Description / Features (e.g., "3 in 1 Portable Wireless Charging Station", "Borosilicate Glass Bottle with Hydration Reminder", "Metal Pen with Bamboo Grip", "6 in 1: Multi-Functional Bamboo Desk Utility").
+           - color: Color / Finish if mentioned (or empty string if missing).
+           - mrp: MRP / Price if mentioned (or empty string if missing).
+           - sizes: Sizes / Dimensions / Capacity / Pack Qty if mentioned (or empty string if missing).
+        3. ALSO locate the primary physical product object(s) or model holding it on each page. Provide `item_box`: [ymin, xmin, ymax, xmax] as percentage numbers from 0 to 100 outlining ONLY the physical product object(s) in the image, strictly avoiding the brand logo at the top (e.g. "FUZO"), product title text, header/footer text, and bottom social/website URLs.
         4. If NOT a product page, set "is_product_page" to false and leave all other fields empty.
 
         Return ONLY a valid JSON ARRAY containing exactly {len(contents)} objects in the same order as the images, matching this exact schema:
