@@ -48,6 +48,7 @@ function App() {
   const [progressMsg, setProgressMsg] = useState('')
   const [progress, setProgress] = useState(0)
   const [eta, setEta] = useState('')
+  const [catalogType, setCatalogType] = useState('apparel') // 'apparel' or 'other'
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault()
@@ -137,13 +138,6 @@ function App() {
         
         await page.render({ canvasContext: context, viewport }).promise
 
-        // Crop left 60% to avoid edge text and side badges
-        const imgCanvas = document.createElement('canvas')
-        const imgCtx = imgCanvas.getContext('2d')
-        imgCanvas.width = canvas.width * 0.60
-        imgCanvas.height = canvas.height
-        imgCtx.drawImage(canvas, 0, 0, imgCanvas.width, imgCanvas.height, 0, 0, imgCanvas.width, imgCanvas.height)
-
         // Send full page image to AI Backend (compressed)
         const aiCanvas = document.createElement('canvas')
         const aiCtx = aiCanvas.getContext('2d')
@@ -193,8 +187,19 @@ function App() {
                 
                 setProgressMsg(`Removing background for product on page ${bCtx.pageNum}...`)
                 
-                // Crop canvas specifically to detected product item bounding box across full page width
-                const imgCanvas = getCroppedItemCanvas(bCtx.fullCanvas, aiData.item_box)
+                let imgCanvas
+                if (catalogType === 'apparel') {
+                  // Apparel mode: crop left 60% of the page to avoid side text/badges
+                  const apparelCanvas = document.createElement('canvas')
+                  const apparelCtx = apparelCanvas.getContext('2d')
+                  apparelCanvas.width = bCtx.fullCanvas.width * 0.60
+                  apparelCanvas.height = bCtx.fullCanvas.height
+                  apparelCtx.drawImage(bCtx.fullCanvas, 0, 0, apparelCanvas.width, apparelCanvas.height, 0, 0, apparelCanvas.width, apparelCanvas.height)
+                  imgCanvas = apparelCanvas
+                } else {
+                  // Other products mode: use AI bounding box to crop only the product area
+                  imgCanvas = getCroppedItemCanvas(bCtx.fullCanvas, aiData.item_box)
+                }
 
                 // High resolution for crystal-clear final output (1200px)
                 const HIGH_RES_DIM = 1200
@@ -313,6 +318,47 @@ function App() {
         </header>
 
         <div className="upload-card">
+          {/* Catalog Type Selector */}
+          <div style={{
+            display: 'flex',
+            gap: '12px',
+            marginBottom: '20px',
+            justifyContent: 'center'
+          }}>
+            <button
+              onClick={() => setCatalogType('apparel')}
+              style={{
+                padding: '10px 24px',
+                borderRadius: '10px',
+                border: catalogType === 'apparel' ? '2px solid #3b82f6' : '2px solid #e2e8f0',
+                background: catalogType === 'apparel' ? 'linear-gradient(135deg, #3b82f6, #6366f1)' : 'rgba(255,255,255,0.05)',
+                color: catalogType === 'apparel' ? '#fff' : '#94a3b8',
+                fontWeight: '600',
+                fontSize: '0.95rem',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              👗 Apparel
+            </button>
+            <button
+              onClick={() => setCatalogType('other')}
+              style={{
+                padding: '10px 24px',
+                borderRadius: '10px',
+                border: catalogType === 'other' ? '2px solid #3b82f6' : '2px solid #e2e8f0',
+                background: catalogType === 'other' ? 'linear-gradient(135deg, #3b82f6, #6366f1)' : 'rgba(255,255,255,0.05)',
+                color: catalogType === 'other' ? '#fff' : '#94a3b8',
+                fontWeight: '600',
+                fontSize: '0.95rem',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              📦 Other Products
+            </button>
+          </div>
+
           <div 
             className={`dropzone ${isDragging ? 'dragging' : ''} ${file ? 'has-file' : ''}`}
             onDragOver={handleDragOver}
