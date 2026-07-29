@@ -199,30 +199,30 @@ function App() {
                 // Crop canvas specifically to detected product item bounding box across full page width
                 const imgCanvas = getCroppedItemCanvas(bCtx.fullCanvas, aiData.item_box)
 
-                // Downscale image for HIGH RES final output (800)
-                const HIGH_RES_DIM = 800
+                // High resolution for crystal-clear final output (1200px)
+                const HIGH_RES_DIM = 1200
                 const hrScale = Math.min(1, Math.min(HIGH_RES_DIM / imgCanvas.width, HIGH_RES_DIM / imgCanvas.height))
                 const hrCanvas = document.createElement('canvas')
                 const hrCtx = hrCanvas.getContext('2d')
-                hrCanvas.width = imgCanvas.width * hrScale
-                hrCanvas.height = imgCanvas.height * hrScale
+                hrCanvas.width = Math.round(imgCanvas.width * hrScale)
+                hrCanvas.height = Math.round(imgCanvas.height * hrScale)
                 hrCtx.fillStyle = '#FFFFFF'
                 hrCtx.fillRect(0, 0, hrCanvas.width, hrCanvas.height)
                 hrCtx.drawImage(imgCanvas, 0, 0, hrCanvas.width, hrCanvas.height)
 
-                // Downscale image drastically for FAST background removal (256)
-                const FAST_DIM = 256
+                // High resolution for background removal (640px) to preserve fine edges and details
+                const FAST_DIM = 640
                 const lrScale = Math.min(1, Math.min(FAST_DIM / imgCanvas.width, FAST_DIM / imgCanvas.height))
                 const lrCanvas = document.createElement('canvas')
                 const lrCtx = lrCanvas.getContext('2d')
-                lrCanvas.width = imgCanvas.width * lrScale
-                lrCanvas.height = imgCanvas.height * lrScale
+                lrCanvas.width = Math.round(imgCanvas.width * lrScale)
+                lrCanvas.height = Math.round(imgCanvas.height * lrScale)
                 lrCtx.fillStyle = '#FFFFFF'
                 lrCtx.fillRect(0, 0, lrCanvas.width, lrCanvas.height)
                 lrCtx.drawImage(imgCanvas, 0, 0, lrCanvas.width, lrCanvas.height)
                 
-                const blob = await new Promise(resolve => lrCanvas.toBlob(resolve, 'image/jpeg', 0.8))
-                const bgRemovedBlob = await removeBackground(blob, { model: "isnet_quint8" })
+                const blob = await new Promise(resolve => lrCanvas.toBlob(resolve, 'image/jpeg', 0.95))
+                const bgRemovedBlob = await removeBackground(blob, { model: "isnet" })
                 const finalUrl = URL.createObjectURL(bgRemovedBlob)
                 
                 const imageData = await new Promise(resolve => {
@@ -233,100 +233,20 @@ function App() {
                     finalCanvas.width = hrCanvas.width
                     finalCanvas.height = hrCanvas.height
                     
-                    // Computer Vision: Clean the mask using Connected Components (BFS)
-                    const BFS_DIM = 200
-                    const maskCanvas = document.createElement('canvas')
-                    const maskCtx = maskCanvas.getContext('2d')
-                    maskCanvas.width = BFS_DIM
-                    maskCanvas.height = BFS_DIM
-                    maskCtx.drawImage(img, 0, 0, BFS_DIM, BFS_DIM)
-                    
-                    const maskData = maskCtx.getImageData(0, 0, BFS_DIM, BFS_DIM)
-                    const data = maskData.data
-                    const visited = new Uint8Array(BFS_DIM * BFS_DIM)
-                    let maxArea = 0
-                    let maxComponent = []
-                    
-                    // Threshold mask heavily to destroy faint ghost text
-                    for (let i = 3; i < data.length; i += 4) {
-                        data[i] = data[i] > 100 ? 255 : 0
-                    }
-                    
-                    // BFS to find the largest contiguous blob (the product/person)
-                    for (let y = 0; y < BFS_DIM; y++) {
-                        for (let x = 0; x < BFS_DIM; x++) {
-                            const idx = y * BFS_DIM + x
-                            if (!visited[idx] && data[idx * 4 + 3] === 255) {
-                                const queue = [idx]
-                                visited[idx] = 1
-                                const component = []
-                                let head = 0
-                                
-                                while (head < queue.length) {
-                                    const curr = queue[head++]
-                                    component.push(curr)
-                                    
-                                    const cx = curr % BFS_DIM
-                                    const cy = Math.floor(curr / BFS_DIM)
-                                    
-                                    if (cx > 0) {
-                                        const nIdx = curr - 1
-                                        if (!visited[nIdx] && data[nIdx * 4 + 3] === 255) { visited[nIdx] = 1; queue.push(nIdx) }
-                                    }
-                                    if (cx < BFS_DIM - 1) {
-                                        const nIdx = curr + 1
-                                        if (!visited[nIdx] && data[nIdx * 4 + 3] === 255) { visited[nIdx] = 1; queue.push(nIdx) }
-                                    }
-                                    if (cy > 0) {
-                                        const nIdx = curr - BFS_DIM
-                                        if (!visited[nIdx] && data[nIdx * 4 + 3] === 255) { visited[nIdx] = 1; queue.push(nIdx) }
-                                    }
-                                    if (cy < BFS_DIM - 1) {
-                                        const nIdx = curr + BFS_DIM
-                                        if (!visited[nIdx] && data[nIdx * 4 + 3] === 255) { visited[nIdx] = 1; queue.push(nIdx) }
-                                    }
-                                }
-                                
-                                if (component.length > maxArea) {
-                                    maxArea = component.length
-                                    maxComponent = component
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Erase everything
-                    for (let i = 3; i < data.length; i += 4) {
-                        data[i] = 0
-                    }
-                    // Restore ONLY the largest blob
-                    for (let i = 0; i < maxComponent.length; i++) {
-                        const idx = maxComponent[i]
-                        data[idx * 4 + 0] = 255
-                        data[idx * 4 + 1] = 255
-                        data[idx * 4 + 2] = 255
-                        data[idx * 4 + 3] = 255
-                    }
-                    
-                    maskCtx.putImageData(maskData, 0, 0)
-                    
-                    // Stretch the perfectly clean mask back to High-Res size
-                    const hrMaskCanvas = document.createElement('canvas')
-                    hrMaskCanvas.width = hrCanvas.width
-                    hrMaskCanvas.height = hrCanvas.height
-                    const hrMaskCtx = hrMaskCanvas.getContext('2d')
-                    hrMaskCtx.drawImage(maskCanvas, 0, 0, hrMaskCanvas.width, hrMaskCanvas.height)
-                    
+                    // Draw original high-res product photo
                     finalCtx.drawImage(hrCanvas, 0, 0)
-                    finalCtx.globalCompositeOperation = 'destination-in'
-                    finalCtx.drawImage(hrMaskCanvas, 0, 0)
                     
+                    // Mask high-res image using ISNet's sub-pixel anti-aliased alpha mask for smooth crisp edges
+                    finalCtx.globalCompositeOperation = 'destination-in'
+                    finalCtx.drawImage(img, 0, 0, finalCanvas.width, finalCanvas.height)
+                    
+                    // Composite onto clean white background
                     finalCtx.globalCompositeOperation = 'destination-over'
                     finalCtx.fillStyle = '#FFFFFF'
                     finalCtx.fillRect(0, 0, finalCanvas.width, finalCanvas.height)
                     
                     resolve({
-                      base64: finalCanvas.toDataURL('image/jpeg', 0.95),
+                      base64: finalCanvas.toDataURL('image/jpeg', 0.98),
                       width: finalCanvas.width,
                       height: finalCanvas.height
                     })
