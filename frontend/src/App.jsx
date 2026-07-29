@@ -1,8 +1,11 @@
 import { useState, useCallback } from 'react'
 import { UploadCloud, FileType, CheckCircle, AlertCircle, Loader2, Download } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { removeBackground } from '@imgly/background-removal'
 import './App.css'
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker || `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`
 
 // Helper to crop canvas based on item_box bounding box percentage [ymin, xmin, ymax, xmax]
 function getCroppedItemCanvas(fullCanvas, itemBox) {
