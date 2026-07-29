@@ -67,7 +67,12 @@ async def extract_info(request: ExtractRequest):
            - color: Color / Finish if mentioned (or empty string if missing).
            - mrp: MRP / Price if mentioned (or empty string if missing).
            - sizes: Sizes / Dimensions / Capacity / Pack Qty if mentioned (or empty string if missing).
-        3. ALSO locate the primary physical product object(s) or model holding it on the page. Provide `item_box`: [ymin, xmin, ymax, xmax] as percentage numbers from 0 to 100 outlining ONLY the physical product object(s) in the image, strictly excluding the brand logo at the top (e.g. "FUZO"), product title text, header/footer text, and bottom social/website URLs.
+        3. CRITICAL: Provide `item_box`: [ymin, xmin, ymax, xmax] as percentage numbers from 0 to 100 that tightly wraps ONLY the physical product object(s) visible in the photo/render. The box must:
+           - Include the COMPLETE product with no part cut off (top, bottom, left, right)
+           - EXCLUDE ALL text: brand logo (e.g. "FUZO"), product name/title text, subtitle/feature text, price text, dimension text, social media URLs, and any overlaid captions
+           - EXCLUDE decorative borders, background color blocks, and page margins
+           - If multiple product views are shown (e.g. front + back), include ALL views in one box
+           - Make the box generous enough that the full product is inside with a small margin
         4. If it is NOT a product page, set "is_product_page" to false and leave all other fields empty.
 
         Return ONLY a valid JSON object matching this exact schema:
@@ -166,7 +171,12 @@ async def extract_info_batch(request: BatchExtractRequest):
            - color: Color / Finish if mentioned (or empty string if missing).
            - mrp: MRP / Price if mentioned (or empty string if missing).
            - sizes: Sizes / Dimensions / Capacity / Pack Qty if mentioned (or empty string if missing).
-        3. ALSO locate the primary physical product object(s) or model holding it on each page. Provide `item_box`: [ymin, xmin, ymax, xmax] as percentage numbers from 0 to 100 outlining ONLY the physical product object(s) in the image, strictly avoiding the brand logo at the top (e.g. "FUZO"), product title text, header/footer text, and bottom social/website URLs.
+        3. CRITICAL: Provide `item_box`: [ymin, xmin, ymax, xmax] as percentage numbers from 0 to 100 that tightly wraps ONLY the physical product object(s) visible in the photo/render on each page. The box must:
+           - Include the COMPLETE product with no part cut off (top, bottom, left, right)
+           - EXCLUDE ALL text: brand logo (e.g. "FUZO"), product name/title text, subtitle/feature text, price text, dimension text, social media URLs, and any overlaid captions
+           - EXCLUDE decorative borders, background color blocks, and page margins
+           - If multiple product views are shown (e.g. front + back), include ALL views in one box
+           - Make the box generous enough that the full product is inside with a small margin
         4. If NOT a product page, set "is_product_page" to false and leave all other fields empty.
 
         Return ONLY a valid JSON ARRAY containing exactly {len(contents)} objects in the same order as the images, matching this exact schema:

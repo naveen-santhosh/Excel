@@ -16,14 +16,11 @@ function getCroppedItemCanvas(fullCanvas, itemBox) {
 
   if (Array.isArray(itemBox) && itemBox.length === 4) {
     [ymin, xmin, ymax, xmax] = itemBox
-    // Expand margins slightly (4%) so full item is included without clipping
-    const padY = Math.max(3, (ymax - ymin) * 0.04)
-    const padX = Math.max(3, (xmax - xmin) * 0.04)
-    if (ymin < 45) {
-      ymin = 0
-    } else {
-      ymin = Math.max(0, ymin - padY)
-    }
+    // Generous padding (8%, min 5%) so NO part of the item is ever clipped
+    const padY = Math.max(5, (ymax - ymin) * 0.08)
+    const padX = Math.max(5, (xmax - xmin) * 0.08)
+    // Always start from the very top to never crop heads/tops of tall items
+    ymin = Math.max(0, ymin - padY)
     xmin = Math.max(0, xmin - padX)
     ymax = Math.min(100, ymax + padY)
     xmax = Math.min(100, xmax + padX)
